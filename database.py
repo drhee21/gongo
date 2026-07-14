@@ -1,0 +1,556 @@
+# -*- coding: utf-8 -*-
+"""공고모아 SQLite 헬퍼."""
+from __future__ import annotations
+
+import json
+import sqlite3
+import uuid
+from datetime import datetime, timedelta
+from pathlib import Path
+from typing import Any, Dict, Iterable, List, Optional
+
+ROOT = Path(__file__).resolve().parent
+DATA_DIR = ROOT / "data"
+DB_PATH = DATA_DIR / "gongo.sqlite"
+
+
+def now_iso() -> str:
+    return datetime.now().isoformat(timespec="seconds")
+
+
+def connect() -> sqlite3.Connection:
+    DATA_DIR.mkdir(exist_ok=True)
+    con = sqlite3.connect(DB_PATH)
+    con.row_factory = sqlite3.Row
+    con.execute("PRAGMA journal_mode=WAL")
+    con.execute("PRAGMA foreign_keys=ON")
+    return con
+
+
+def _migrate_to_per_user(con: sqlite3.Connection, table: str) -> None:
+    """즐겨찾기/AI 판정 테이블을 사용자별 구조로 옮긴다.
+
+    두 테이블 모두 원래 notice_id 하나만 PRIMARY KEY였기 때문에, 단순
+    ALTER TABLE ADD COLUMN으로는 사용자별로 여러 행을 가질 수 없다
+    (같은 notice_id에 사용자별로 다른 값이 있어야 하는데 기존 PK가 막는다).
+    이미 이 앱은 배포 직전 단계라 예전 단일 사용자 데이터는 보존할 필요가
+    없으므로, user_id 컬럼이 없는 옛 스키마를 발견하면 통째로 지우고
+    새 스키마(복합 PK)로 다시 만든다.
+    """
+    cols = [r[1] for r in con.execute(f"PRAGMA table_info({table})").fetchall()]
+    if cols and "user_id" not in cols:
+        con.execute(f"DROP TABLE {table}")
+
+
+def init_db() -> None:
+    with connect() as con:
+        _migrate_to_per_user(con, "favorites")
+        _migrate_to_per_user(con, "ai_fit")
+        con.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS notices (
+                id TEXT PRIMARY KEY,
+                source TEXT NOT NULL,
+                title TEXT NOT NULL,
+                org TEXT,
+                category TEXT,
+                start_date TEXT,
+                end_date TEXT,
+                budget TEXT,
+                elig_json TEXT,
+                url TEXT,
+                raw_json TEXT,
+                first_seen_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS sources (
+                id TEXT PRIMARY KEY,
+                name TEXT,
+                method TEXT,
+                state TEXT,
+                count INTEGER DEFAULT 0,
+                last_collected_at TEXT,
+                error TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS users (
+                id TEXT PRIMARY KEY,
+                email TEXT NOT NULL UNIQUE,
+                password_salt TEXT NOT NULL,
+                password_hash TEXT NOT NULL,
+                anthropic_api_key_enc TEXT,
+                created_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS sessions (
+                token TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS user_settings (
+                user_id TEXT NOT NULL,
+                key TEXT NOT NULL,
+                value_json TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (user_id, key),
+                FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS favorites (
+                user_id TEXT NOT NULL,
+                notice_id TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (user_id, notice_id),
+                FOREIGN KEY(notice_id) REFERENCES notices(id) ON DELETE CASCADE,
+                FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS notice_sources (
+                notice_id TEXT NOT NULL,
+                source TEXT NOT NULL,
+                url TEXT,
+                PRIMARY KEY (notice_id, source),
+                FOREIGN KEY(notice_id) REFERENCES notices(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS ai_fit (
+                user_id TEXT NOT NULL,
+                notice_id TEXT NOT NULL,
+                fit TEXT,
+                reason TEXT,
+                profile_hash TEXT,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (user_id, notice_id),
+                FOREIGN KEY(notice_id) REFERENCES notices(id) ON DELETE CASCADE,
+                FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_notices_source ON notices(source);
+            CREATE INDEX IF NOT EXISTS idx_notices_end ON notices(end_date);
+            CREATE INDEX IF NOT EXISTS idx_notices_category ON notices(category);
+            """
+        )
+
+
+def upsert_notices(items: Iterable[Dict[str, Any]], prune: bool = True) -> int:
+    """Insert/update notices and their per-site source list.
+
+    `prune=True` removes notices that are no longer part of the current
+    collection run (and are not favorited), so notices that a source stops
+    reporting -- or duplicate rows left behind by an old id scheme -- do not
+    accumulate forever. Callers should pass `prune=False` when `items` is a
+    partial/fallback set (e.g. the sample data shown when every real source
+    fails) so a temporary outage doesn't wipe out previously collected data.
+    """
+    init_db()
+    items = list(items)
+    count = 0
+    ts = now_iso()
+    ids: List[str] = []
+    with connect() as con:
+        for a in items:
+            nid = a.get("id")
+            if not nid:
+                continue
+            ids.append(nid)
+            con.execute(
+                """
+                INSERT INTO notices (
+                    id, source, title, org, category, start_date, end_date,
+                    budget, elig_json, url, raw_json, first_seen_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    source=excluded.source,
+                    title=excluded.title,
+                    org=excluded.org,
+                    category=excluded.category,
+                    start_date=excluded.start_date,
+                    end_date=excluded.end_date,
+                    budget=excluded.budget,
+                    elig_json=excluded.elig_json,
+                    url=excluded.url,
+                    raw_json=excluded.raw_json,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    nid,
+                    a.get("src") or a.get("source") or "unknown",
+                    a.get("title") or "제목 없음",
+                    a.get("org") or "기관 미표기",
+                    a.get("category") or "기타",
+                    a.get("start") or a.get("start_date"),
+                    a.get("end") or a.get("end_date"),
+                    a.get("budget") or "공고 참조",
+                    json.dumps(a.get("elig"), ensure_ascii=False) if a.get("elig") is not None else None,
+                    a.get("url") or "",
+                    json.dumps(a, ensure_ascii=False),
+                    ts,
+                    ts,
+                ),
+            )
+            sources = a.get("sources") or [{"id": a.get("src") or a.get("source") or "unknown", "url": a.get("url")}]
+            con.execute("DELETE FROM notice_sources WHERE notice_id=?", (nid,))
+            seen_src = set()
+            for s in sources:
+                sid = s.get("id")
+                if not sid or sid in seen_src:
+                    continue
+                seen_src.add(sid)
+                con.execute(
+                    "INSERT OR REPLACE INTO notice_sources(notice_id, source, url) VALUES (?, ?, ?)",
+                    (nid, sid, s.get("url") or ""),
+                )
+            count += 1
+        if prune and ids:
+            placeholders = ",".join("?" * len(ids))
+            con.execute(
+                f"DELETE FROM notices WHERE id NOT IN ({placeholders}) AND id NOT IN (SELECT notice_id FROM favorites)",
+                ids,
+            )
+    return count
+
+
+def replace_source_status(statuses: Dict[str, Dict[str, Any]]) -> None:
+    init_db()
+    ts = now_iso()
+    with connect() as con:
+        for sid, s in statuses.items():
+            con.execute(
+                """
+                INSERT INTO sources (id, name, method, state, count, last_collected_at, error)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    name=excluded.name,
+                    method=excluded.method,
+                    state=excluded.state,
+                    count=excluded.count,
+                    last_collected_at=excluded.last_collected_at,
+                    error=excluded.error
+                """,
+                (
+                    sid,
+                    s.get("name") or sid,
+                    s.get("method") or "",
+                    s.get("state") or "미확인",
+                    int(s.get("n") or s.get("count") or 0),
+                    s.get("last") or ts,
+                    s.get("error"),
+                ),
+            )
+
+
+def row_to_notice(row: sqlite3.Row) -> Dict[str, Any]:
+    elig = None
+    if row["elig_json"]:
+        try:
+            elig = json.loads(row["elig_json"])
+        except Exception:
+            elig = None
+    return {
+        "id": row["id"],
+        "src": row["source"],
+        "title": row["title"],
+        "org": row["org"],
+        "category": row["category"],
+        "start": row["start_date"],
+        "end": row["end_date"],
+        "budget": row["budget"],
+        "elig": elig,
+        "url": row["url"],
+        "favorite": bool(row["favorite"]),
+        "first_seen_at": row["first_seen_at"],
+        "updated_at": row["updated_at"],
+    }
+
+
+def list_notices(
+    q: str = "", source: str = "", category: str = "", favorite: bool = False, user_id: Optional[str] = None
+) -> List[Dict[str, Any]]:
+    init_db()
+    where = []
+    args: List[Any] = []
+    if q:
+        where.append("(n.title LIKE ? OR n.org LIKE ? OR n.category LIKE ?)")
+        like = f"%{q}%"
+        args.extend([like, like, like])
+    if source:
+        where.append("n.id IN (SELECT notice_id FROM notice_sources WHERE source = ?)")
+        args.append(source)
+    if category:
+        where.append("n.category = ?")
+        args.append(category)
+    if favorite:
+        where.append("f.notice_id IS NOT NULL")
+    sql = """
+        SELECT n.*, CASE WHEN f.notice_id IS NULL THEN 0 ELSE 1 END AS favorite
+        FROM notices n
+        LEFT JOIN favorites f ON f.notice_id = n.id AND f.user_id = ?
+    """
+    args = [user_id, *args]
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    sql += " ORDER BY CASE WHEN n.end_date IS NULL THEN 1 ELSE 0 END, n.end_date ASC, n.updated_at DESC"
+    with connect() as con:
+        notices = [row_to_notice(r) for r in con.execute(sql, args)]
+        ids = [n["id"] for n in notices]
+        by_id: Dict[str, List[Dict[str, Any]]] = {}
+        if ids:
+            placeholders = ",".join("?" * len(ids))
+            for r in con.execute(
+                f"SELECT notice_id, source, url FROM notice_sources WHERE notice_id IN ({placeholders})", ids
+            ):
+                by_id.setdefault(r["notice_id"], []).append({"id": r["source"], "url": r["url"]})
+        for n in notices:
+            n["sources"] = by_id.get(n["id"]) or ([{"id": n["src"], "url": n["url"]}] if n.get("src") else [])
+        return notices
+
+
+SOURCE_ALIASES = {
+    "biohub_direct": "biohub",
+    "khidi_direct": "khidi",
+}
+
+SOURCE_META = {
+    "kstartup": {"name": "K-스타트업", "method": "HTML"},
+    "bizinfo": {"name": "기업마당", "method": "API"},
+    "biohub": {"name": "서울바이오허브", "method": "직접/기업마당"},
+    "khidi": {"name": "보건산업진흥원/KHIDI", "method": "직접/기업마당"},
+    "kddf": {"name": "국가신약개발사업단", "method": "게시판"},
+    "nrf": {"name": "한국연구재단", "method": "게시판"},
+    "sample": {"name": "샘플", "method": "내장 데이터"},
+}
+
+SOURCE_ORDER = ["bizinfo", "kstartup", "biohub", "khidi", "kddf", "nrf", "sample"]
+
+
+def canonical_source_id(source_id: str) -> str:
+    return SOURCE_ALIASES.get(source_id, source_id)
+
+
+def list_sources(clean: bool = True) -> List[Dict[str, Any]]:
+    """Return source status for the UI.
+
+    The collector can create both routed and direct rows, for example
+    `biohub` plus `biohub_direct`.  The sidebar should not show those as
+    separate duplicated sources.  This function aggregates aliases, uses the
+    actual notice table count as the source of truth, and hides zero-count
+    waiting/disabled/error rows from the compact UI.
+    """
+    init_db()
+    with connect() as con:
+        source_rows = [dict(r) for r in con.execute("SELECT * FROM sources ORDER BY id")]
+        notice_counts: Dict[str, int] = {}
+        for r in con.execute("SELECT source, COUNT(*) AS n FROM notices GROUP BY source"):
+            sid = canonical_source_id(r["source"])
+            notice_counts[sid] = notice_counts.get(sid, 0) + int(r["n"])
+
+    if not clean:
+        return source_rows
+
+    grouped: Dict[str, Dict[str, Any]] = {}
+
+    # Seed groups from status rows so names/methods are preserved.
+    for row in source_rows:
+        sid = canonical_source_id(row.get("id") or "unknown")
+        meta = SOURCE_META.get(sid, {})
+        g = grouped.setdefault(sid, {
+            "id": sid,
+            "name": meta.get("name") or row.get("name") or sid,
+            "method": meta.get("method") or row.get("method") or "",
+            "state": row.get("state") or "미확인",
+            "count": 0,
+            "last_collected_at": row.get("last_collected_at"),
+            "error": None,
+        })
+        if row.get("last_collected_at") and (not g.get("last_collected_at") or row.get("last_collected_at") > g.get("last_collected_at")):
+            g["last_collected_at"] = row.get("last_collected_at")
+        if row.get("error") and not g.get("error"):
+            g["error"] = row.get("error")
+        # Keep a non-waiting state only when there is no actual notice count.
+        if g.get("state") in {"대기", "비활성화", "0건", "미확인"} and row.get("state"):
+            g["state"] = row.get("state")
+
+    # Actual notice count is the source of truth.  If a source has notices, the
+    # UI state should be normal even if the latest collection attempt produced
+    # an error row.
+    for sid, cnt in notice_counts.items():
+        meta = SOURCE_META.get(sid, {})
+        g = grouped.setdefault(sid, {
+            "id": sid,
+            "name": meta.get("name") or sid,
+            "method": meta.get("method") or "",
+            "state": "정상",
+            "count": 0,
+            "last_collected_at": None,
+            "error": None,
+        })
+        g["count"] = int(cnt)
+        if cnt > 0:
+            g["state"] = "정상"
+            g["error"] = None
+
+    # If real sources exist, do not show sample fallback in the sidebar.
+    real_total = sum(v.get("count", 0) for k, v in grouped.items() if k != "sample")
+
+    cleaned: List[Dict[str, Any]] = []
+    for sid, g in grouped.items():
+        cnt = int(g.get("count") or 0)
+        state = g.get("state") or "미확인"
+        if sid == "sample" and real_total > 0:
+            continue
+        # Hide non-actionable zero rows.  They are still available in the raw DB,
+        # but the user-facing sidebar should be clean and non-duplicated.
+        if cnt == 0 and state in {"대기", "비활성화", "0건", "오류", "차단(robots)", "미확인"}:
+            continue
+        cleaned.append(g)
+
+    cleaned.sort(key=lambda x: SOURCE_ORDER.index(x["id"]) if x["id"] in SOURCE_ORDER else 999)
+    return cleaned
+
+
+def toggle_favorite(user_id: str, notice_id: str) -> bool:
+    init_db()
+    with connect() as con:
+        exists = con.execute(
+            "SELECT 1 FROM favorites WHERE user_id=? AND notice_id=?", (user_id, notice_id)
+        ).fetchone()
+        if exists:
+            con.execute("DELETE FROM favorites WHERE user_id=? AND notice_id=?", (user_id, notice_id))
+            return False
+        con.execute(
+            "INSERT OR IGNORE INTO favorites(user_id, notice_id, created_at) VALUES (?, ?, ?)",
+            (user_id, notice_id, now_iso()),
+        )
+        return True
+
+
+def favorite_ids(user_id: str) -> List[str]:
+    init_db()
+    with connect() as con:
+        return [
+            r[0]
+            for r in con.execute(
+                "SELECT notice_id FROM favorites WHERE user_id=? ORDER BY created_at DESC", (user_id,)
+            )
+        ]
+
+
+def save_ai_fit(user_id: str, results: Dict[str, Dict[str, str]], profile_hash: str) -> None:
+    init_db()
+    ts = now_iso()
+    with connect() as con:
+        for nid, r in results.items():
+            con.execute(
+                """
+                INSERT INTO ai_fit(user_id, notice_id, fit, reason, profile_hash, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(user_id, notice_id) DO UPDATE SET
+                    fit=excluded.fit,
+                    reason=excluded.reason,
+                    profile_hash=excluded.profile_hash,
+                    updated_at=excluded.updated_at
+                """,
+                (user_id, nid, r.get("fit"), r.get("reason"), profile_hash, ts),
+            )
+
+
+def get_ai_fit_map(user_id: str, profile_hash: str) -> Dict[str, Dict[str, str]]:
+    init_db()
+    with connect() as con:
+        rows = con.execute(
+            "SELECT notice_id, fit, reason FROM ai_fit WHERE user_id=? AND profile_hash=?", (user_id, profile_hash)
+        ).fetchall()
+    return {r["notice_id"]: {"fit": r["fit"], "reason": r["reason"]} for r in rows}
+
+
+def get_user_setting(user_id: str, key: str, default: Optional[Any] = None) -> Any:
+    init_db()
+    with connect() as con:
+        row = con.execute(
+            "SELECT value_json FROM user_settings WHERE user_id=? AND key=?", (user_id, key)
+        ).fetchone()
+    if not row:
+        return default
+    try:
+        return json.loads(row["value_json"])
+    except Exception:
+        return default
+
+
+def set_user_setting(user_id: str, key: str, value: Any) -> None:
+    init_db()
+    with connect() as con:
+        con.execute(
+            """
+            INSERT INTO user_settings(user_id, key, value_json, updated_at) VALUES (?, ?, ?, ?)
+            ON CONFLICT(user_id, key) DO UPDATE SET value_json=excluded.value_json, updated_at=excluded.updated_at
+            """,
+            (user_id, key, json.dumps(value, ensure_ascii=False), now_iso()),
+        )
+
+
+# ──────────────────────────── 계정 / 세션 ────────────────────────────
+
+def create_user(email: str, password_salt: str, password_hash: str) -> str:
+    init_db()
+    uid = uuid.uuid4().hex
+    with connect() as con:
+        con.execute(
+            "INSERT INTO users(id, email, password_salt, password_hash, created_at) VALUES (?, ?, ?, ?, ?)",
+            (uid, email.strip().lower(), password_salt, password_hash, now_iso()),
+        )
+    return uid
+
+
+def get_user_by_email(email: str) -> Optional[Dict[str, Any]]:
+    init_db()
+    with connect() as con:
+        row = con.execute("SELECT * FROM users WHERE email=?", (email.strip().lower(),)).fetchone()
+    return dict(row) if row else None
+
+
+def get_user_by_id(user_id: str) -> Optional[Dict[str, Any]]:
+    init_db()
+    with connect() as con:
+        row = con.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def set_user_api_key(user_id: str, encrypted_key: Optional[str]) -> None:
+    init_db()
+    with connect() as con:
+        con.execute("UPDATE users SET anthropic_api_key_enc=? WHERE id=?", (encrypted_key, user_id))
+
+
+def create_session(user_id: str, token: str, ttl_days: int = 30) -> None:
+    init_db()
+    ts = now_iso()
+    expires = (datetime.now() + timedelta(days=ttl_days)).isoformat(timespec="seconds")
+    with connect() as con:
+        con.execute(
+            "INSERT INTO sessions(token, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
+            (token, user_id, ts, expires),
+        )
+
+
+def get_session_user(token: str) -> Optional[Dict[str, Any]]:
+    init_db()
+    with connect() as con:
+        row = con.execute(
+            """
+            SELECT u.* FROM sessions s JOIN users u ON u.id = s.user_id
+            WHERE s.token = ? AND s.expires_at > ?
+            """,
+            (token, now_iso()),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def delete_session(token: str) -> None:
+    init_db()
+    with connect() as con:
+        con.execute("DELETE FROM sessions WHERE token=?", (token,))

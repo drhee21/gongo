@@ -1,0 +1,95 @@
+{
+  "_comment": "config.example.json을 config.json으로 복사해서 사용하세요. API 키가 없으면 해당 소스는 오류가 아니라 건너뜁니다.",
+  "use_sample_when_empty": true,
+  "common": {
+    "timeout_sec": 20,
+    "request_delay_sec": 0.8,
+    "max_items_per_source": 80,
+    "respect_robots": true
+  },
+  "bizinfo": {
+    "enabled": false,
+    "crtfcKey": "여기에_기업마당_API키",
+    "page_unit": 200
+  },
+  "kstartup": {
+    "enabled": true,
+    "method": "html",
+    "list_url": "https://www.k-startup.go.kr/web/contents/bizpbanc-ongoing.do",
+    "list_urls": [
+      "https://www.k-startup.go.kr/web/contents/bizpbanc-ongoing.do"
+    ],
+    "max_items": 80,
+    "_note": "API 키 없이 K-Startup 모집중 웹페이지 HTML을 직접 크롤링합니다."
+  },
+  "route_from_bizinfo": {
+    "biohub": [
+      "서울바이오허브",
+      "홍릉",
+      "바이오허브"
+    ],
+    "khidi": [
+      "한국보건산업진흥원",
+      "보건산업진흥원",
+      "KHIDI",
+      "보산원"
+    ]
+  },
+  "boards": {
+    "nrf": {
+      "enabled": true,
+      "name": "한국연구재단",
+      "list_url": "https://www.nrf.re.kr/biz/notice/list?menu_no=362&biz_not_gubn=guide",
+      "base_url": "https://www.nrf.re.kr",
+      "link_pattern": "notice/view|bbs/view|view",
+      "org": "한국연구재단",
+      "category": "R&D",
+      "method": "nrf_text",
+      "_note": "NRF 전용 텍스트 파서 사용. 상세 URL 대신 목록 URL을 연결합니다."
+    },
+    "kddf": {
+      "enabled": false,
+      "name": "국가신약개발사업단",
+      "list_url": "TODO_KDDF_공고게시판_URL",
+      "base_url": "https://www.kddf.org",
+      "link_pattern": "view|View|bbs|notice",
+      "org": "국가신약개발사업단",
+      "category": "R&D"
+    },
+    "biohub_direct": {
+      "enabled": true,
+      "name": "서울바이오허브(직접)",
+      "list_urls": [
+        "https://www.seoulbiohub.kr/front/supportManageReq/supportManageList.do?gubun=14",
+        "https://www.seoulbiohub.kr/front/supportManageReq/supportManageList.do?gubun=08",
+        "https://www.seoulbiohub.kr/front/search/totalSearch.do"
+      ],
+      "list_url": "https://www.seoulbiohub.kr/front/supportManageReq/supportManageList.do?gubun=14",
+      "base_url": "https://www.seoulbiohub.kr",
+      "link_pattern": "supportManageView.do|seq=",
+      "org": "서울바이오허브",
+      "category": "바이오·헬스",
+      "seed_urls": [
+        "https://www.seoulbiohub.kr/front/supportManageReq/supportManageView.do?gubun=08&seq=763",
+        "https://www.seoulbiohub.kr/front/supportManageReq/supportManageView.do?gubun=14&seq=759",
+        "https://www.seoulbiohub.kr/front/supportManageReq/supportManageView.do?gubun=14&seq=751",
+        "https://www.seoulbiohub.kr/front/supportManageReq/supportManageView.do?gubun=14&seq=746",
+        "https://www.seoulbiohub.kr/front/supportManageReq/supportManageView.do?gubun=09&seq=736",
+        "https://www.seoulbiohub.kr/front/supportManageReq/supportManageView.do?gubun=04&seq=714"
+      ],
+      "seq_scan_enabled": true,
+      "gubun_list": [
+        "14",
+        "08",
+        "09",
+        "04",
+        "03",
+        "12"
+      ],
+      "seq_start": 700,
+      "seq_end": 830,
+      "max_detail_pages": 500,
+      "detail_delay_sec": 0.03
+    }
+  }
+}
