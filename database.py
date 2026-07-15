@@ -27,6 +27,13 @@ def connect() -> sqlite3.Connection:
     return con
 
 
+def _ensure_column(con: sqlite3.Connection, table: str, column: str, coltype: str) -> None:
+    """이미 배포된 DB에 새 컬럼을 안전하게 추가한다 (있으면 아무 것도 안 함)."""
+    cols = [r[1] for r in con.execute(f"PRAGMA table_info({table})").fetchall()]
+    if column not in cols:
+        con.execute(f"ALTER TABLE {table} ADD COLUMN {column} {coltype}")
+
+
 def _migrate_to_per_user(con: sqlite3.Connection, table: str) -> None:
     """즐겨찾기/AI 판정 테이블을 사용자별 구조로 옮긴다.
 
@@ -80,6 +87,7 @@ def init_db() -> None:
                 password_salt TEXT NOT NULL,
                 password_hash TEXT NOT NULL,
                 anthropic_api_key_enc TEXT,
+                bizinfo_api_key_enc TEXT,
                 created_at TEXT NOT NULL
             );
 
@@ -134,6 +142,7 @@ def init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_notices_category ON notices(category);
             """
         )
+        _ensure_column(con, "users", "bizinfo_api_key_enc", "TEXT")
 
 
 def upsert_notices(items: Iterable[Dict[str, Any]], prune: bool = True) -> int:
@@ -307,6 +316,21 @@ def list_notices(
         for n in notices:
             n["sources"] = by_id.get(n["id"]) or ([{"id": n["src"], "url": n["url"]}] if n.get("src") else [])
         return notices
+
+
+def hide_bizinfo_only(notices: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """기업마당 API로만 확보된 공고(다른 무료 소스에 없는 것)를 걸러낸다.
+
+    기업마당 API 키를 등록하지 않은 사용자(비로그인 포함)에게는 이 공고들을
+    숨긴다. K-스타트업 등 무료 소스에도 함께 올라온 공고는 그 소스를 통해
+    합법적으로 볼 수 있으므로 그대로 노출한다.
+    """
+    out = []
+    for n in notices:
+        source_ids = {s.get("id") for s in (n.get("sources") or [])} or {n.get("src")}
+        if source_ids - {"bizinfo"}:
+            out.append(n)
+    return out
 
 
 SOURCE_ALIASES = {
@@ -524,6 +548,12 @@ def set_user_api_key(user_id: str, encrypted_key: Optional[str]) -> None:
     init_db()
     with connect() as con:
         con.execute("UPDATE users SET anthropic_api_key_enc=? WHERE id=?", (encrypted_key, user_id))
+
+
+def set_user_bizinfo_key(user_id: str, encrypted_key: Optional[str]) -> None:
+    init_db()
+    with connect() as con:
+        con.execute("UPDATE users SET bizinfo_api_key_enc=? WHERE id=?", (encrypted_key, user_id))
 
 
 def create_session(user_id: str, token: str, ttl_days: int = 30) -> None:

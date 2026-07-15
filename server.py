@@ -128,7 +128,11 @@ def clear_session_cookie_header() -> str:
 
 
 def user_public(user: Dict[str, Any]) -> Dict[str, Any]:
-    return {"email": user["email"], "has_api_key": bool(user.get("anthropic_api_key_enc"))}
+    return {
+        "email": user["email"],
+        "has_api_key": bool(user.get("anthropic_api_key_enc")),
+        "has_bizinfo_key": bool(user.get("bizinfo_api_key_enc")),
+    }
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -188,6 +192,8 @@ class Handler(BaseHTTPRequestHandler):
                 )
                 company = database.get_user_setting(user_id, "company", {}) if user_id else {}
                 enriched = attach_ai_fit(add_runtime_fields(items), user_id, company)
+                if not (user and user.get("bizinfo_api_key_enc")):
+                    enriched = database.hide_bizinfo_only(enriched)
                 self.send_json({"ok": True, "items": enriched})
                 return
             if path == "/api/sources":
@@ -208,7 +214,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({"ok": True, "company": database.get_user_setting(user["id"], "company", {})})
                 return
             if path == "/api/export.csv":
-                self.export_csv()
+                user = current_user(self)
+                self.export_csv(user)
                 return
             self.serve_static(path)
         except Exception as e:
@@ -236,7 +243,7 @@ class Handler(BaseHTTPRequestHandler):
                 token = auth.new_session_token()
                 database.create_session(uid, token, ttl_days=SESSION_TTL_DAYS)
                 self.send_json(
-                    {"ok": True, "user": {"email": email, "has_api_key": False}},
+                    {"ok": True, "user": {"email": email, "has_api_key": False, "has_bizinfo_key": False}},
                     set_cookie=session_cookie_header(token),
                 )
                 return
@@ -274,6 +281,20 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 database.set_user_api_key(user["id"], auth.encrypt_secret(raw_key))
                 self.send_json({"ok": True, "has_api_key": True})
+                return
+            if path == "/api/me/bizinfo-key":
+                user = current_user(self)
+                if not user:
+                    self.send_json({"ok": False, "error": "로그인이 필요합니다"}, status=401)
+                    return
+                data = self.read_json()
+                raw_key = str(data.get("bizinfo_key") or "").strip()
+                if not raw_key:
+                    database.set_user_bizinfo_key(user["id"], None)
+                    self.send_json({"ok": True, "has_bizinfo_key": False})
+                    return
+                database.set_user_bizinfo_key(user["id"], auth.encrypt_secret(raw_key))
+                self.send_json({"ok": True, "has_bizinfo_key": True})
                 return
             if path == "/api/recollect":
                 user = current_user(self)
@@ -362,8 +383,10 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:
             self.send_json({"ok": False, "error": str(e)}, status=500)
 
-    def export_csv(self) -> None:
+    def export_csv(self, user: Optional[Dict[str, Any]] = None) -> None:
         items = add_runtime_fields(database.list_notices())
+        if not (user and user.get("bizinfo_api_key_enc")):
+            items = database.hide_bizinfo_only(items)
         buf = io.StringIO()
         w = csv.writer(buf)
         w.writerow(["source", "title", "org", "category", "status", "start", "end", "dday", "budget", "url"])

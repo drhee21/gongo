@@ -295,8 +295,9 @@ function renderAuthUI(){
 
 function updateApiKeyStatus(){
   const el = $('#apiKeyStatus');
-  if(!el) return;
-  el.textContent = currentUserState?.has_api_key ? 'API 키가 등록되어 있습니다.' : '등록된 API 키가 없습니다.';
+  if(el) el.textContent = currentUserState?.has_api_key ? 'API 키가 등록되어 있습니다.' : '등록된 API 키가 없습니다.';
+  const bizEl = $('#bizinfoKeyStatus');
+  if(bizEl) bizEl.textContent = currentUserState?.has_bizinfo_key ? '기업마당 API 키가 등록되어 있습니다.' : '등록된 기업마당 API 키가 없습니다 — 기업마당 공고가 목록에서 보이지 않습니다.';
 }
 
 async function recollect(){
@@ -377,6 +378,20 @@ $('#apiKeyForm')?.addEventListener('submit', async e=>{
     updateApiKeyStatus();
     form.reset();
     alert(res.has_api_key ? 'API 키 저장 완료' : 'API 키 삭제 완료');
+  }catch(err){ alert(err.message); }
+});
+
+$('#bizinfoKeyForm')?.addEventListener('submit', async e=>{
+  e.preventDefault();
+  const form = e.currentTarget;
+  const data = Object.fromEntries(new FormData(form).entries());
+  try{
+    const res = await api('/api/me/bizinfo-key', {method:'POST', body:JSON.stringify({bizinfo_key: data.bizinfo_key})});
+    if(currentUserState) currentUserState.has_bizinfo_key = res.has_bizinfo_key;
+    updateApiKeyStatus();
+    form.reset();
+    await loadAll();
+    alert(res.has_bizinfo_key ? '기업마당 API 키 저장 완료' : '기업마당 API 키 삭제 완료');
   }catch(err){ alert(err.message); }
 });
 
