@@ -97,15 +97,32 @@ def judge_company_fit(notices: List[Dict[str, Any]], company: Dict[str, Any], ap
             f"[공고 목록 ({len(briefs)}건, JSON)]\n{json.dumps(briefs, ensure_ascii=False)}"
         )
 
-        with client.messages.stream(
-            model=MODEL,
-            max_tokens=16000,
-            thinking={"type": "adaptive"},
-            system=SYSTEM_PROMPT,
-            output_config={"format": {"type": "json_schema", "schema": FIT_SCHEMA}},
-            messages=[{"role": "user", "content": user_content}],
-        ) as stream:
-            response = stream.get_final_message()
+        try:
+            with client.messages.stream(
+                model=MODEL,
+                max_tokens=16000,
+                thinking={"type": "adaptive"},
+                system=SYSTEM_PROMPT,
+                output_config={"format": {"type": "json_schema", "schema": FIT_SCHEMA}},
+                messages=[{"role": "user", "content": user_content}],
+            ) as stream:
+                response = stream.get_final_message()
+        except anthropic.AuthenticationError:
+            raise RuntimeError("등록된 Claude API 키가 유효하지 않습니다. '회사 정보'에서 키를 다시 확인해주세요.")
+        except anthropic.PermissionDeniedError:
+            raise RuntimeError("이 Claude API 키로는 해당 모델을 사용할 권한이 없습니다.")
+        except anthropic.RateLimitError:
+            raise RuntimeError("Claude API 요청 한도를 초과했습니다. 잠시 후 다시 시도해주세요.")
+        except anthropic.BadRequestError as e:
+            msg = str(e)
+            if "credit balance is too low" in msg:
+                raise RuntimeError(
+                    "Claude API 크레딧 잔액이 부족합니다. "
+                    "console.anthropic.com의 Plans & Billing에서 결제 수단을 등록하거나 크레딧을 충전한 뒤 다시 시도해주세요."
+                )
+            raise RuntimeError(f"Claude API 요청이 거부되었습니다: {msg}")
+        except anthropic.APIStatusError as e:
+            raise RuntimeError(f"Claude API 오류가 발생했습니다: {e}")
 
         text = next((b.text for b in response.content if b.type == "text"), None)
         if not text:
