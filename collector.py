@@ -16,7 +16,7 @@ import re
 import time
 import urllib.robotparser
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import urljoin, urlparse
@@ -44,6 +44,7 @@ SOURCE_CATALOG: Dict[str, Dict[str, str]] = {
     "sample": {"name": "샘플", "method": "내장 데이터"},
     "biohub_direct": {"name": "서울바이오허브", "method": "전용 파서"},
     "khidi_direct": {"name": "보건산업진흥원/KHIDI", "method": "게시판"},
+    "g2b": {"name": "나라장터", "method": "API"},
 }
 
 DATE_SEP = re.compile(r"(20\d{2})\s*[.\-/년]\s*(\d{1,2})\s*[.\-/월]\s*(\d{1,2})")
@@ -254,6 +255,107 @@ def collect_bizinfo(cfg: Dict[str, Any], route: Dict[str, List[str]]) -> Dict[st
         out.setdefault(src, []).append(normalize(src, title, org, cat, start, end, url, elig=elig_from_text(target, title, haystack), raw=it))
     return out
 
+
+G2B_BASE = "http://apis.data.go.kr/1230000/ad/BidPublicInfoService"
+G2B_OPERATIONS = ["getBidPblancListInfoThng", "getBidPblancListInfoServc"]  # 물품, 용역
+
+
+def collect_g2b(cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """나라장터(조달청) 입찰공고정보서비스에서 공고를 가져온다.
+
+    전국 모든 입찰공고(물품/용역만 해도 하루 수백~수천 건)를 그대로 가져오면
+    나머지 소스와 균형이 맞지 않으므로, `cfg["keywords"]`에 매칭되는 공고만
+    남긴다. 키워드가 비어 있으면(설정 실수 방지) 아무것도 반환하지 않는다.
+    """
+    if not cfg.get("enabled", False):
+        raise RuntimeError("비활성화됨")
+    key = cfg.get("serviceKey")
+    if is_blank_key(key):
+        key = os.environ.get("G2B_API_KEY")
+    if is_blank_key(key):
+        raise RuntimeError("나라장터 API 키가 없습니다")
+
+    keywords = [k for k in (cfg.get("keywords") or []) if k]
+    if not keywords:
+        return []
+
+    days = int(cfg.get("days", 3))
+    max_pages = int(cfg.get("max_pages", 6))
+    num_of_rows = int(cfg.get("page_unit", 500))
+    timeout = cfg.get("timeout_sec", 20)
+    delay = cfg.get("request_delay_sec", 0.3)
+
+    end_dt = datetime.now()
+    begin_dt = end_dt - timedelta(days=days)
+    inqry_bgn = begin_dt.strftime("%Y%m%d") + "0000"
+    inqry_end = end_dt.strftime("%Y%m%d") + "2359"
+
+    out: List[Dict[str, Any]] = []
+    seen_ids = set()
+    for op_name in G2B_OPERATIONS:
+        for page in range(1, max_pages + 1):
+            params = {
+                "serviceKey": key,
+                "pageNo": str(page),
+                "numOfRows": str(num_of_rows),
+                "inqryDiv": "1",
+                "inqryBgnDt": inqry_bgn,
+                "inqryEndDt": inqry_end,
+                "type": "json",
+            }
+            r = SESSION.get(f"{G2B_BASE}/{op_name}", params=params, timeout=timeout)
+            r.raise_for_status()
+            try:
+                data = r.json()
+            except ValueError:
+                raise RuntimeError(f"나라장터 API 응답 파싱 실패(키/쿼터 문제일 수 있음): {r.text[:200]}")
+            header = (data.get("response") or {}).get("header") or {}
+            if header.get("resultCode") not in ("00", 0, "0"):
+                raise RuntimeError(f"나라장터 API 오류: {header.get('resultMsg') or header.get('resultCode')}")
+            body = (data.get("response") or {}).get("body") or {}
+            items = body.get("items") or []
+            if isinstance(items, dict):
+                items = [items]
+            if not items:
+                break
+
+            for it in items:
+                title = pick(it, "bidNtceNm")
+                if not title:
+                    continue
+                cls_name = pick(it, "dtilPrdctClsfcNoNm") or ""
+                inst_name = pick(it, "ntceInsttNm") or ""
+                haystack = f"{title} {cls_name} {inst_name}"
+                if not any(kw in haystack for kw in keywords):
+                    continue
+                bid_no = pick(it, "bidNtceNo")
+                bid_ord = pick(it, "bidNtceOrd") or "000"
+                uid = f"{bid_no}-{bid_ord}"
+                if not bid_no or uid in seen_ids:
+                    continue
+                seen_ids.add(uid)
+
+                start = (pick(it, "bidNtceDt") or "")[:10] or None
+                end = (pick(it, "bidClseDt") or pick(it, "opengDt") or "")[:10] or None
+                url = pick(it, "bidNtceDtlUrl", "bidNtceUrl") or "https://www.g2b.go.kr"
+                budget_raw = pick(it, "presmptPrce", "asignBdgtAmt")
+                try:
+                    budget = f"{int(float(budget_raw)):,}원"
+                except (TypeError, ValueError):
+                    budget = "공고 참조"
+                org = pick(it, "ntceInsttNm", "dminsttNm")
+                out.append(
+                    normalize(
+                        "g2b", title, org, "나라장터 입찰", start, end, url,
+                        budget=budget, elig=elig_from_text(title, haystack), raw=it,
+                    )
+                )
+
+            if len(items) < num_of_rows:
+                break
+            time.sleep(delay)
+
+    return out
 
 
 KSTARTUP_DEFAULT_URL = "https://www.k-startup.go.kr/web/contents/bizpbanc-ongoing.do"
@@ -1019,8 +1121,20 @@ def load_sample_items() -> List[Dict[str, Any]]:
     return json.loads(SAMPLE_PATH.read_text(encoding="utf-8"))
 
 
+def _apply_source_override(sub_cfg: Dict[str, Any], source_id: str, overrides: Dict[str, str]) -> Dict[str, Any]:
+    """관리자가 재정의한 URL이 있으면 해당 소스 설정의 list_url/list_urls를 덮어쓴다."""
+    url = overrides.get(source_id)
+    if not url:
+        return sub_cfg
+    sub_cfg = dict(sub_cfg)
+    sub_cfg["list_url"] = url
+    sub_cfg["list_urls"] = [url]
+    return sub_cfg
+
+
 def collect_all(write_db: bool = True) -> CollectRun:
     cfg = load_config()
+    overrides = database.get_source_overrides()
     run = CollectRun()
     common = cfg.get("common", {})
     cap = int(common.get("max_items_per_source", 60))
@@ -1041,8 +1155,18 @@ def collect_all(write_db: bool = True) -> CollectRun:
     else:
         run.record("bizinfo", [], "비활성화")
 
+    # 나라장터(G2B) 입찰공고 — 물품/용역 중 키워드에 매칭되는 것만.
+    gcfg = cfg.get("g2b", {})
+    if gcfg.get("enabled", False):
+        try:
+            run.record("g2b", collect_g2b({**common, **gcfg})[:cap], "정상")
+        except Exception as e:
+            run.record("g2b", [], "오류", e)
+    else:
+        run.record("g2b", [], "비활성화")
+
     # K-Startup.
-    kcfg = cfg.get("kstartup", {})
+    kcfg = _apply_source_override(cfg.get("kstartup", {}), "kstartup", overrides)
     if kcfg.get("enabled", False):
         try:
             run.record("kstartup", collect_kstartup({**common, **kcfg})[:cap], "정상")
@@ -1052,9 +1176,10 @@ def collect_all(write_db: bool = True) -> CollectRun:
         run.record("kstartup", [], "비활성화")
 
     # Direct boards.
-    for sid, board_cfg in (cfg.get("boards") or {}).items():
+    for sid, raw_board_cfg in (cfg.get("boards") or {}).items():
         if sid.startswith("_"):
             continue
+        board_cfg = _apply_source_override(raw_board_cfg, sid, overrides)
         if not board_cfg.get("enabled", False):
             run.record(sid, [], "비활성화")
             continue
@@ -1084,6 +1209,8 @@ def collect_all(write_db: bool = True) -> CollectRun:
 
     if write_db:
         database.upsert_notices(run.items, prune=not used_sample)
+        run.sources = database.flag_source_anomalies(run.sources)
+        database.record_source_history(run.sources)
         database.replace_source_status(run.sources)
     return run
 

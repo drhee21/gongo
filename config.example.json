@@ -22,6 +22,15 @@
     "max_items": 80,
     "_note": "API 키 없이 K-Startup 모집중 웹페이지 HTML을 직접 크롤링합니다."
   },
+  "g2b": {
+    "enabled": false,
+    "serviceKey": "여기에_나라장터_공공데이터포털_서비스키",
+    "days": 3,
+    "max_pages": 6,
+    "page_unit": 500,
+    "keywords": ["바이오", "헬스", "의료", "제약", "신약", "진단", "백신", "유전자", "임상", "병원", "R&D", "연구개발", "보건"],
+    "_note": "조달청 나라장터 입찰공고정보서비스(data.go.kr). 전국 물품/용역 입찰공고 중 keywords에 매칭되는 것만 가져옵니다. keywords는 회사 분야에 맞게 바꾸세요."
+  },
   "route_from_bizinfo": {
     "biohub": [
       "서울바이오허브",

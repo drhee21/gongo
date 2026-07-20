@@ -21,6 +21,7 @@ import auth
 import ai_match
 import collector
 import database
+import uploads
 
 ROOT = Path(__file__).resolve().parent
 STATIC = ROOT / "static"
@@ -30,6 +31,21 @@ SESSION_TTL_DAYS = 30
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 RECOLLECT_COOLDOWN_SEC = 300
 _last_recollect_at: Optional[datetime] = None
+
+ADMIN_EMAILS = {
+    e.strip().lower() for e in os.environ.get("ADMIN_EMAILS", "").split(",") if e.strip()
+}
+OVERRIDABLE_SOURCES = {"kstartup", "nrf", "kddf", "biohub_direct", "khidi_direct"}
+MAX_COMPANY_DOCUMENTS = 10
+
+
+def maybe_promote_admin(user: Dict[str, Any]) -> Dict[str, Any]:
+    """ADMIN_EMAILS 환경변수에 등록된 이메일이면 자동으로 관리자 권한을 부여한다."""
+    if user["email"] in ADMIN_EMAILS and not user.get("is_admin"):
+        database.set_user_admin(user["id"], True)
+        user = dict(user)
+        user["is_admin"] = 1
+    return user
 
 
 def json_bytes(obj: Any, status: int = 200) -> bytes:
@@ -116,7 +132,10 @@ def current_user(handler: BaseHTTPRequestHandler) -> Optional[Dict[str, Any]]:
     token = get_cookie(handler, SESSION_COOKIE)
     if not token:
         return None
-    return database.get_session_user(token)
+    user = database.get_session_user(token)
+    if not user:
+        return None
+    return maybe_promote_admin(user)
 
 
 def session_cookie_header(token: str) -> str:
@@ -132,6 +151,7 @@ def user_public(user: Dict[str, Any]) -> Dict[str, Any]:
         "email": user["email"],
         "has_api_key": bool(user.get("anthropic_api_key_enc")),
         "has_bizinfo_key": bool(user.get("bizinfo_api_key_enc")),
+        "is_admin": bool(user.get("is_admin")),
     }
 
 
@@ -167,6 +187,10 @@ class Handler(BaseHTTPRequestHandler):
         raw = self.rfile.read(n).decode("utf-8")
         return json.loads(raw or "{}")
 
+    def read_raw_body(self) -> bytes:
+        n = int(self.headers.get("Content-Length", "0") or "0")
+        return self.rfile.read(n) if n else b""
+
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         path = unquote(parsed.path)
@@ -199,6 +223,26 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/sources":
                 self.send_json({"ok": True, "items": database.list_sources(), "raw": database.list_sources(clean=False)})
                 return
+            if path == "/api/admin/source-overrides":
+                user = current_user(self)
+                if not (user and user.get("is_admin")):
+                    self.send_json({"ok": False, "error": "관리자 권한이 필요합니다"}, status=403)
+                    return
+                cfg = collector.load_config()
+                overrides = database.get_source_overrides()
+                boards = cfg.get("boards") or {}
+                items = [
+                    {"source_id": sid, "name": name, "default_url": default_url, "override_url": overrides.get(sid)}
+                    for sid, name, default_url in [
+                        ("kstartup", "K-스타트업", (cfg.get("kstartup") or {}).get("list_url")),
+                        ("nrf", "한국연구재단", (boards.get("nrf") or {}).get("list_url")),
+                        ("kddf", "국가신약개발사업단", (boards.get("kddf") or {}).get("list_url")),
+                        ("biohub_direct", "서울바이오허브", (boards.get("biohub_direct") or {}).get("list_url")),
+                        ("khidi_direct", "보건산업진흥원/KHIDI", (boards.get("khidi_direct") or {}).get("list_url")),
+                    ]
+                ]
+                self.send_json({"ok": True, "items": items})
+                return
             if path == "/api/favorites":
                 user = current_user(self)
                 if not user:
@@ -212,6 +256,15 @@ class Handler(BaseHTTPRequestHandler):
                     self.send_json({"ok": False, "error": "로그인이 필요합니다"}, status=401)
                     return
                 self.send_json({"ok": True, "company": database.get_user_setting(user["id"], "company", {})})
+                return
+            if path == "/api/company/documents":
+                user = current_user(self)
+                if not user:
+                    self.send_json({"ok": False, "error": "로그인이 필요합니다"}, status=401)
+                    return
+                docs = database.list_company_documents(user["id"])
+                items = [{"id": d["id"], "filename": d["filename"], "char_count": d["char_count"], "created_at": d["created_at"]} for d in docs]
+                self.send_json({"ok": True, "items": items})
                 return
             if path == "/api/export.csv":
                 user = current_user(self)
@@ -242,8 +295,9 @@ class Handler(BaseHTTPRequestHandler):
                 uid = database.create_user(email, salt, pw_hash)
                 token = auth.new_session_token()
                 database.create_session(uid, token, ttl_days=SESSION_TTL_DAYS)
+                new_user = maybe_promote_admin(database.get_user_by_id(uid))
                 self.send_json(
-                    {"ok": True, "user": {"email": email, "has_api_key": False, "has_bizinfo_key": False}},
+                    {"ok": True, "user": user_public(new_user)},
                     set_cookie=session_cookie_header(token),
                 )
                 return
@@ -257,6 +311,7 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 token = auth.new_session_token()
                 database.create_session(user["id"], token, ttl_days=SESSION_TTL_DAYS)
+                user = maybe_promote_admin(user)
                 self.send_json({"ok": True, "user": user_public(user)}, set_cookie=session_cookie_header(token))
                 return
             if path == "/api/auth/logout":
@@ -311,6 +366,20 @@ class Handler(BaseHTTPRequestHandler):
                 run = collector.collect_all(write_db=True)
                 self.send_json({"ok": True, "count": len(run.items), "sources": run.sources})
                 return
+            if path == "/api/admin/source-overrides":
+                user = current_user(self)
+                if not (user and user.get("is_admin")):
+                    self.send_json({"ok": False, "error": "관리자 권한이 필요합니다"}, status=403)
+                    return
+                data = self.read_json()
+                source_id = str(data.get("source_id") or "").strip()
+                if source_id not in OVERRIDABLE_SOURCES:
+                    self.send_json({"ok": False, "error": "알 수 없는 소스입니다"}, status=400)
+                    return
+                list_url = str(data.get("list_url") or "").strip()
+                database.set_source_override(source_id, list_url or None)
+                self.send_json({"ok": True, "source_id": source_id, "override_url": list_url or None})
+                return
             if path == "/api/favorite/toggle":
                 user = current_user(self)
                 if not user:
@@ -333,6 +402,45 @@ class Handler(BaseHTTPRequestHandler):
                 database.set_user_setting(user["id"], "company", data)
                 self.send_json({"ok": True, "company": data})
                 return
+            if path == "/api/company/documents":
+                user = current_user(self)
+                if not user:
+                    self.send_json({"ok": False, "error": "로그인이 필요합니다"}, status=401)
+                    return
+                if len(database.list_company_documents(user["id"])) >= MAX_COMPANY_DOCUMENTS:
+                    self.send_json(
+                        {"ok": False, "error": f"문서는 최대 {MAX_COMPANY_DOCUMENTS}개까지 등록할 수 있습니다."}, status=400
+                    )
+                    return
+                content_type = self.headers.get("Content-Type", "")
+                body = self.read_raw_body()
+                try:
+                    files = uploads.parse_multipart(content_type, body)
+                    if not files:
+                        raise ValueError("업로드된 파일이 없습니다.")
+                    for f in files:
+                        text = uploads.extract_text(f.filename, f.data)
+                        database.add_company_document(user["id"], f.filename, text)
+                except ValueError as e:
+                    self.send_json({"ok": False, "error": str(e)}, status=400)
+                    return
+                docs = database.list_company_documents(user["id"])
+                items = [{"id": d["id"], "filename": d["filename"], "char_count": d["char_count"], "created_at": d["created_at"]} for d in docs]
+                self.send_json({"ok": True, "items": items})
+                return
+            if path == "/api/company/documents/delete":
+                user = current_user(self)
+                if not user:
+                    self.send_json({"ok": False, "error": "로그인이 필요합니다"}, status=401)
+                    return
+                data = self.read_json()
+                doc_id = data.get("doc_id")
+                if not doc_id:
+                    self.send_json({"ok": False, "error": "doc_id required"}, status=400)
+                    return
+                database.delete_company_document(user["id"], doc_id)
+                self.send_json({"ok": True})
+                return
             if path == "/api/ai-fit":
                 user = current_user(self)
                 if not user:
@@ -346,8 +454,9 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 api_key = auth.decrypt_secret(enc_key)
                 company = database.get_user_setting(user["id"], "company", {})
+                documents = database.list_company_documents(user["id"])
                 notices = database.list_notices()
-                results = ai_match.judge_company_fit(notices, company, api_key)
+                results = ai_match.judge_company_fit(notices, company, api_key, documents=documents)
                 database.save_ai_fit(user["id"], results, company_profile_hash(company))
                 counts: Dict[str, int] = {}
                 for r in results.values():

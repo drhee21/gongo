@@ -56,6 +56,33 @@ def _company_text(company: Dict[str, Any]) -> str:
     return "\n".join(parts) or "회사 정보 없음 (일반적인 기준으로 판단)"
 
 
+DOC_MAX_CHARS_PER_FILE = 3000
+DOC_MAX_CHARS_TOTAL = 10000
+
+
+def _documents_text(documents: List[Dict[str, Any]] | None) -> str:
+    """업로드된 회사 문서들을 프롬프트에 넣을 텍스트로 합친다.
+
+    문서가 많거나 길면 토큰 비용이 커지므로, 파일당/전체 글자수 상한을 둔다.
+    """
+    if not documents:
+        return ""
+    parts = []
+    total = 0
+    for doc in documents:
+        content = (doc.get("content") or "")[:DOC_MAX_CHARS_PER_FILE]
+        if total + len(content) > DOC_MAX_CHARS_TOTAL:
+            content = content[: max(0, DOC_MAX_CHARS_TOTAL - total)]
+        if not content:
+            break
+        note = "" if len(content) == len(doc.get("content") or "") else " (일부 생략됨)"
+        parts.append(f"--- {doc.get('filename', '문서')}{note} ---\n{content}")
+        total += len(content)
+        if total >= DOC_MAX_CHARS_TOTAL:
+            break
+    return "\n\n".join(parts)
+
+
 def _notice_brief(n: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "id": n.get("id"),
@@ -73,11 +100,18 @@ def _chunks(items: List[Any], size: int) -> List[List[Any]]:
     return [items[i:i + size] for i in range(0, len(items), size)]
 
 
-def judge_company_fit(notices: List[Dict[str, Any]], company: Dict[str, Any], api_key: str) -> Dict[str, Dict[str, str]]:
+def judge_company_fit(
+    notices: List[Dict[str, Any]],
+    company: Dict[str, Any],
+    api_key: str,
+    documents: List[Dict[str, Any]] | None = None,
+) -> Dict[str, Dict[str, str]]:
     """공고 목록과 회사 정보를 Claude API로 비교해 각 공고의 적합도를 판정한다.
 
     `api_key`는 호출자(서버)가 요청한 사용자 본인의 Claude API 키를 넘겨줘야 한다 —
     이 함수는 더 이상 config.json/환경변수에서 키를 찾지 않는다.
+    `documents`는 사용자가 업로드한 회사 문서(파일명+추출된 텍스트) 목록으로,
+    간단한 폼 필드보다 더 풍부한 판단 근거를 제공한다.
 
     반환값: {notice_id: {"fit": "fit"|"unfit"|"unsure", "reason": str}}
     """
@@ -88,14 +122,28 @@ def judge_company_fit(notices: List[Dict[str, Any]], company: Dict[str, Any], ap
 
     client = anthropic.Anthropic(api_key=api_key)
     company_text = _company_text(company)
+    documents_text = _documents_text(documents)
+    profile_block = company_text
+    if documents_text:
+        profile_block += f"\n\n[회사 관련 첨부 문서]\n{documents_text}"
 
     out: Dict[str, Dict[str, str]] = {}
     for batch in _chunks(notices, CHUNK_SIZE):
         briefs = [_notice_brief(n) for n in batch]
-        user_content = (
-            f"[회사 정보]\n{company_text}\n\n"
-            f"[공고 목록 ({len(briefs)}건, JSON)]\n{json.dumps(briefs, ensure_ascii=False)}"
-        )
+        # 회사 정보/문서 블록은 청크마다 동일하게 반복되므로 별도 content block으로
+        # 분리해 cache_control을 붙인다 — 같은 실행 안의 반복 호출이 캐시를 재사용해
+        # 문서 텍스트만큼 토큰 비용이 배로 늘어나는 걸 막는다.
+        user_content = [
+            {
+                "type": "text",
+                "text": f"[회사 정보]\n{profile_block}",
+                "cache_control": {"type": "ephemeral"},
+            },
+            {
+                "type": "text",
+                "text": f"[공고 목록 ({len(briefs)}건, JSON)]\n{json.dumps(briefs, ensure_ascii=False)}",
+            },
+        ]
 
         try:
             with client.messages.stream(

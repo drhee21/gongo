@@ -78,8 +78,27 @@ def init_db() -> None:
                 state TEXT,
                 count INTEGER DEFAULT 0,
                 last_collected_at TEXT,
-                error TEXT
+                error TEXT,
+                anomaly INTEGER DEFAULT 0,
+                anomaly_note TEXT
             );
+
+            CREATE TABLE IF NOT EXISTS source_overrides (
+                source_id TEXT PRIMARY KEY,
+                list_url TEXT,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS source_run_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source_id TEXT NOT NULL,
+                count INTEGER NOT NULL,
+                state TEXT NOT NULL,
+                error TEXT,
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_source_run_history_source
+                ON source_run_history(source_id, created_at);
 
             CREATE TABLE IF NOT EXISTS users (
                 id TEXT PRIMARY KEY,
@@ -88,7 +107,18 @@ def init_db() -> None:
                 password_hash TEXT NOT NULL,
                 anthropic_api_key_enc TEXT,
                 bizinfo_api_key_enc TEXT,
+                is_admin INTEGER DEFAULT 0,
                 created_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS company_documents (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                filename TEXT NOT NULL,
+                content TEXT NOT NULL,
+                char_count INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
             );
 
             CREATE TABLE IF NOT EXISTS sessions (
@@ -143,6 +173,9 @@ def init_db() -> None:
             """
         )
         _ensure_column(con, "users", "bizinfo_api_key_enc", "TEXT")
+        _ensure_column(con, "users", "is_admin", "INTEGER DEFAULT 0")
+        _ensure_column(con, "sources", "anomaly", "INTEGER DEFAULT 0")
+        _ensure_column(con, "sources", "anomaly_note", "TEXT")
 
 
 def upsert_notices(items: Iterable[Dict[str, Any]], prune: bool = True) -> int:
@@ -230,15 +263,17 @@ def replace_source_status(statuses: Dict[str, Dict[str, Any]]) -> None:
         for sid, s in statuses.items():
             con.execute(
                 """
-                INSERT INTO sources (id, name, method, state, count, last_collected_at, error)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO sources (id, name, method, state, count, last_collected_at, error, anomaly, anomaly_note)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     name=excluded.name,
                     method=excluded.method,
                     state=excluded.state,
                     count=excluded.count,
                     last_collected_at=excluded.last_collected_at,
-                    error=excluded.error
+                    error=excluded.error,
+                    anomaly=excluded.anomaly,
+                    anomaly_note=excluded.anomaly_note
                 """,
                 (
                     sid,
@@ -248,8 +283,91 @@ def replace_source_status(statuses: Dict[str, Dict[str, Any]]) -> None:
                     int(s.get("n") or s.get("count") or 0),
                     s.get("last") or ts,
                     s.get("error"),
+                    1 if s.get("anomaly") else 0,
+                    s.get("anomaly_note"),
                 ),
             )
+
+
+HISTORY_KEEP_PER_SOURCE = 20
+ANOMALY_ZERO_MIN_AVG = 3       # 0건 경고를 띄우려면 최근 평균이 최소 이 정도는 되어야 함
+ANOMALY_DROP_MIN_AVG = 5       # 급감 경고를 띄우려면 최근 평균이 최소 이 정도는 되어야 함
+ANOMALY_DROP_RATIO = 0.3       # 최근 평균의 이 비율 미만이면 급감으로 간주
+
+
+def record_source_history(statuses: Dict[str, Dict[str, Any]]) -> None:
+    """매 수집 실행마다 소스별 건수를 append하고, 소스당 최근 N건만 남긴다."""
+    init_db()
+    ts = now_iso()
+    with connect() as con:
+        for sid, s in statuses.items():
+            con.execute(
+                "INSERT INTO source_run_history(source_id, count, state, error, created_at) VALUES (?, ?, ?, ?, ?)",
+                (sid, int(s.get("n") or s.get("count") or 0), s.get("state") or "미확인", s.get("error"), ts),
+            )
+            con.execute(
+                """
+                DELETE FROM source_run_history
+                WHERE source_id = ? AND id NOT IN (
+                    SELECT id FROM source_run_history WHERE source_id = ?
+                    ORDER BY created_at DESC LIMIT ?
+                )
+                """,
+                (sid, sid, HISTORY_KEEP_PER_SOURCE),
+            )
+
+
+def flag_source_anomalies(statuses: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    """이번 실행 건수를 소스별 최근 이력 평균과 비교해 이상 급감을 표시한다.
+
+    반드시 `record_source_history`로 이번 실행을 기록하기 *전에* 호출해야
+    한다 (그래야 비교 기준이 이번 실행을 제외한 과거 이력이 된다).
+    """
+    init_db()
+    out: Dict[str, Dict[str, Any]] = {}
+    with connect() as con:
+        for sid, s in statuses.items():
+            entry = dict(s)
+            rows = con.execute(
+                "SELECT count FROM source_run_history WHERE source_id = ? ORDER BY created_at DESC LIMIT ?",
+                (sid, HISTORY_KEEP_PER_SOURCE),
+            ).fetchall()
+            positive = [r["count"] for r in rows if r["count"] > 0]
+            avg = sum(positive) / len(positive) if positive else 0
+            current = int(s.get("n") or s.get("count") or 0)
+            entry["anomaly"] = False
+            entry["anomaly_note"] = None
+            if len(positive) >= 3 and avg >= ANOMALY_ZERO_MIN_AVG and current == 0:
+                entry["anomaly"] = True
+                entry["anomaly_note"] = f"최근 평균 {avg:.0f}건 대비 0건 — 사이트 구조 변경으로 수집이 깨졌을 수 있습니다."
+            elif len(positive) >= 3 and avg >= ANOMALY_DROP_MIN_AVG and 0 < current < avg * ANOMALY_DROP_RATIO:
+                entry["anomaly"] = True
+                entry["anomaly_note"] = f"최근 평균 {avg:.0f}건 대비 {current}건으로 급감했습니다."
+            out[sid] = entry
+    return out
+
+
+def get_source_overrides() -> Dict[str, str]:
+    """관리자가 재정의한 소스별 수집 URL을 반환한다 ({source_id: list_url})."""
+    init_db()
+    with connect() as con:
+        rows = con.execute(
+            "SELECT source_id, list_url FROM source_overrides WHERE list_url IS NOT NULL AND list_url != ''"
+        ).fetchall()
+    return {r["source_id"]: r["list_url"] for r in rows}
+
+
+def set_source_override(source_id: str, list_url: Optional[str]) -> None:
+    """소스 수집 URL을 재정의한다. list_url이 비어있으면 재정의를 해제한다."""
+    init_db()
+    with connect() as con:
+        con.execute(
+            """
+            INSERT INTO source_overrides(source_id, list_url, updated_at) VALUES (?, ?, ?)
+            ON CONFLICT(source_id) DO UPDATE SET list_url=excluded.list_url, updated_at=excluded.updated_at
+            """,
+            (source_id, list_url or None, now_iso()),
+        )
 
 
 def row_to_notice(row: sqlite3.Row) -> Dict[str, Any]:
@@ -345,10 +463,11 @@ SOURCE_META = {
     "khidi": {"name": "보건산업진흥원/KHIDI", "method": "직접/기업마당"},
     "kddf": {"name": "국가신약개발사업단", "method": "게시판"},
     "nrf": {"name": "한국연구재단", "method": "게시판"},
+    "g2b": {"name": "나라장터", "method": "API"},
     "sample": {"name": "샘플", "method": "내장 데이터"},
 }
 
-SOURCE_ORDER = ["bizinfo", "kstartup", "biohub", "khidi", "kddf", "nrf", "sample"]
+SOURCE_ORDER = ["bizinfo", "kstartup", "biohub", "khidi", "kddf", "nrf", "g2b", "sample"]
 
 
 def canonical_source_id(source_id: str) -> str:
@@ -389,11 +508,16 @@ def list_sources(clean: bool = True) -> List[Dict[str, Any]]:
             "count": 0,
             "last_collected_at": row.get("last_collected_at"),
             "error": None,
+            "anomaly": False,
+            "anomaly_note": None,
         })
         if row.get("last_collected_at") and (not g.get("last_collected_at") or row.get("last_collected_at") > g.get("last_collected_at")):
             g["last_collected_at"] = row.get("last_collected_at")
         if row.get("error") and not g.get("error"):
             g["error"] = row.get("error")
+        if row.get("anomaly") and not g.get("anomaly"):
+            g["anomaly"] = True
+            g["anomaly_note"] = row.get("anomaly_note")
         # Keep a non-waiting state only when there is no actual notice count.
         if g.get("state") in {"대기", "비활성화", "0건", "미확인"} and row.get("state"):
             g["state"] = row.get("state")
@@ -411,6 +535,8 @@ def list_sources(clean: bool = True) -> List[Dict[str, Any]]:
             "count": 0,
             "last_collected_at": None,
             "error": None,
+            "anomaly": False,
+            "anomaly_note": None,
         })
         g["count"] = int(cnt)
         if cnt > 0:
@@ -428,7 +554,9 @@ def list_sources(clean: bool = True) -> List[Dict[str, Any]]:
             continue
         # Hide non-actionable zero rows.  They are still available in the raw DB,
         # but the user-facing sidebar should be clean and non-duplicated.
-        if cnt == 0 and state in {"대기", "비활성화", "0건", "오류", "차단(robots)", "미확인"}:
+        # Anomaly-flagged rows are the one exception: hiding those would defeat
+        # the whole point of surfacing a silent scraping failure.
+        if cnt == 0 and state in {"대기", "비활성화", "0건", "오류", "차단(robots)", "미확인"} and not g.get("anomaly"):
             continue
         cleaned.append(g)
 
@@ -550,6 +678,12 @@ def set_user_api_key(user_id: str, encrypted_key: Optional[str]) -> None:
         con.execute("UPDATE users SET anthropic_api_key_enc=? WHERE id=?", (encrypted_key, user_id))
 
 
+def set_user_admin(user_id: str, is_admin: bool) -> None:
+    init_db()
+    with connect() as con:
+        con.execute("UPDATE users SET is_admin=? WHERE id=?", (1 if is_admin else 0, user_id))
+
+
 def set_user_bizinfo_key(user_id: str, encrypted_key: Optional[str]) -> None:
     init_db()
     with connect() as con:
@@ -584,3 +718,32 @@ def delete_session(token: str) -> None:
     init_db()
     with connect() as con:
         con.execute("DELETE FROM sessions WHERE token=?", (token,))
+
+
+# ──────────────────────────── 회사 문서 ────────────────────────────
+
+def add_company_document(user_id: str, filename: str, content: str) -> str:
+    init_db()
+    doc_id = uuid.uuid4().hex
+    with connect() as con:
+        con.execute(
+            "INSERT INTO company_documents(id, user_id, filename, content, char_count, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (doc_id, user_id, filename, content, len(content), now_iso()),
+        )
+    return doc_id
+
+
+def list_company_documents(user_id: str) -> List[Dict[str, Any]]:
+    init_db()
+    with connect() as con:
+        rows = con.execute(
+            "SELECT id, filename, content, char_count, created_at FROM company_documents WHERE user_id=? ORDER BY created_at DESC",
+            (user_id,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def delete_company_document(user_id: str, doc_id: str) -> None:
+    init_db()
+    with connect() as con:
+        con.execute("DELETE FROM company_documents WHERE user_id=? AND id=?", (user_id, doc_id))

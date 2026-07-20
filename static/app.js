@@ -28,6 +28,7 @@ function sourceName(id){
     khidi:'보건산업진흥원/KHIDI',
     kddf:'국가신약개발사업단',
     nrf:'한국연구재단',
+    g2b:'나라장터',
     sample:'샘플'
   };
   const s = sources.find(x=>canonicalSource(x.id)===cid);
@@ -246,7 +247,7 @@ function renderSources(){
   const mini = displaySources.map(s=>`<div class="source-mini"><span>${esc(s.name || s.id)}</span><span class="state-ok">정상 ${Number(s.count)||0}</span></div>`).join('');
   $('#sourceMini').innerHTML = mini || '<div class="source-mini">아직 수집 전</div>';
   const adminRows = rawSources.length ? rawSources : displaySources;
-  $('#sourcesTable').innerHTML = `<table class="table"><thead><tr><th>ID</th><th>소스</th><th>방식</th><th>상태</th><th>건수</th><th>오류</th></tr></thead><tbody>${adminRows.map(s=>`<tr><td>${esc(s.id)}</td><td>${esc(s.name||s.id)}</td><td>${esc(s.method||'')}</td><td>${esc(s.state||'미확인')}</td><td>${esc(Number(s.count)||0)}</td><td>${esc(s.error||'')}</td></tr>`).join('')}</tbody></table>`;
+  $('#sourcesTable').innerHTML = `<table class="table"><thead><tr><th>ID</th><th>소스</th><th>방식</th><th>상태</th><th>건수</th><th>오류</th></tr></thead><tbody>${adminRows.map(s=>`<tr><td>${esc(s.id)}</td><td>${esc(s.name||s.id)}</td><td>${esc(s.method||'')}</td><td>${esc(s.state||'미확인')}${s.anomaly?`<span class="badge-warn" title="${esc(s.anomaly_note||'')}">⚠ 이상감지</span>`:''}</td><td>${esc(Number(s.count)||0)}</td><td>${esc(s.error||s.anomaly_note||'')}</td></tr>`).join('')}</tbody></table>`;
   const sel = $('#sourceFilter');
   const cur = canonicalSource(sel.value);
   const ids = [...new Set(notices.flatMap(a=>noticeSources(a).map(s=>s.id)))];
@@ -284,6 +285,7 @@ function renderAuthUI(){
     if($('#accountEmail')) $('#accountEmail').textContent = currentUserState.email;
     companyLoginRequired?.classList.add('hidden');
     companyLoggedInArea?.classList.remove('hidden');
+    loadCompanyDocs();
   } else {
     loggedOut?.classList.remove('hidden');
     loggedIn?.classList.add('hidden');
@@ -291,6 +293,42 @@ function renderAuthUI(){
     companyLoggedInArea?.classList.add('hidden');
   }
   updateApiKeyStatus();
+  const overridesPanel = $('#adminOverridesPanel');
+  if(currentUserState?.is_admin){
+    overridesPanel?.classList.remove('hidden');
+    loadSourceOverrides();
+  } else {
+    overridesPanel?.classList.add('hidden');
+  }
+}
+
+async function loadSourceOverrides(){
+  const el = $('#sourceOverridesTable');
+  if(!el) return;
+  try{
+    const res = await api('/api/admin/source-overrides');
+    const items = res.items || [];
+    el.innerHTML = items.map(s => `
+      <div class="override-row" data-source="${esc(s.source_id)}">
+        <div class="override-label">${esc(s.name)}</div>
+        <div class="override-current">기본값: ${esc(s.default_url || '(없음)')}</div>
+        <input type="text" class="override-input" placeholder="재정의할 URL (비우면 기본값 사용)" value="${esc(s.override_url || '')}" />
+        <button type="button" class="button override-save">저장</button>
+      </div>
+    `).join('') || '<p class="meta">재정의 가능한 소스가 없습니다.</p>';
+    el.querySelectorAll('.override-save').forEach(btn=>{
+      btn.addEventListener('click', async ()=>{
+        const row = btn.closest('.override-row');
+        const source_id = row.dataset.source;
+        const list_url = row.querySelector('.override-input').value.trim();
+        try{
+          await api('/api/admin/source-overrides', {method:'POST', body:JSON.stringify({source_id, list_url})});
+          alert(list_url ? '재정의 저장 완료' : '재정의 해제 완료');
+          loadSourceOverrides();
+        }catch(err){ alert(err.message); }
+      });
+    });
+  }catch(err){ el.innerHTML = `<p class="meta">${esc(err.message)}</p>`; }
 }
 
 function updateApiKeyStatus(){
@@ -392,6 +430,50 @@ $('#bizinfoKeyForm')?.addEventListener('submit', async e=>{
     form.reset();
     await loadAll();
     alert(res.has_bizinfo_key ? '기업마당 API 키 저장 완료' : '기업마당 API 키 삭제 완료');
+  }catch(err){ alert(err.message); }
+});
+
+async function loadCompanyDocs(){
+  const el = $('#companyDocsList');
+  if(!el || !currentUserState) return;
+  try{
+    const res = await api('/api/company/documents');
+    const items = res.items || [];
+    el.innerHTML = items.length
+      ? items.map(d => `
+          <div class="doc-row" data-id="${esc(d.id)}">
+            <span class="doc-name">${esc(d.filename)}</span>
+            <span class="doc-meta">${esc(d.char_count)}자</span>
+            <button type="button" class="button doc-delete">삭제</button>
+          </div>
+        `).join('')
+      : '<p class="meta">등록된 문서가 없습니다.</p>';
+    el.querySelectorAll('.doc-delete').forEach(btn=>{
+      btn.addEventListener('click', async ()=>{
+        const doc_id = btn.closest('.doc-row').dataset.id;
+        try{
+          await api('/api/company/documents/delete', {method:'POST', body:JSON.stringify({doc_id})});
+          loadCompanyDocs();
+        }catch(err){ alert(err.message); }
+      });
+    });
+  }catch(err){ el.innerHTML = `<p class="meta">${esc(err.message)}</p>`; }
+}
+
+$('#companyDocsForm')?.addEventListener('submit', async e=>{
+  e.preventDefault();
+  const form = e.currentTarget;
+  const input = $('#companyDocsInput');
+  if(!input.files.length){ alert('업로드할 파일을 선택해주세요.'); return; }
+  const fd = new FormData();
+  for(const f of input.files) fd.append('files', f);
+  try{
+    const res = await fetch('/api/company/documents', {method:'POST', credentials:'same-origin', body: fd});
+    const data = await res.json();
+    if(!res.ok || data.ok === false) throw new Error(data.error || `HTTP ${res.status}`);
+    form.reset();
+    alert('문서 업로드 완료');
+    loadCompanyDocs();
   }catch(err){ alert(err.message); }
 });
 
