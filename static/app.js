@@ -72,8 +72,21 @@ function aiFitBadge(a){
   if(!a.ai_fit) return '';
   const label = {fit:'적합', unfit:'부적합', unsure:'확인'}[a.ai_fit] || '확인';
   const cls = {fit:'open', unfit:'closed', unsure:''}[a.ai_fit] || '';
-  const title = a.ai_reason ? ` title="${esc(a.ai_reason)}"` : '';
-  return `<span class="badge ai ${cls}"${title}>${esc(label)}</span>`;
+  const hasReason = !!a.ai_reason;
+  const trig = hasReason ? ' ai-trigger' : '';
+  const caret = hasReason ? '<span class="ai-caret">▾</span>' : '';
+  return `<span class="badge ai ${cls}${trig}"${hasReason?` data-ai-toggle="${esc(a.id)}"`:''}>${esc(label)}${caret}</span>`;
+}
+
+// 판정 근거를 배지 옆 접이식 줄로 보여준다. unsure(확인 필요)는 사용자가 실제로
+// 손봐야 하는 항목이므로 기본 펼침, fit/unfit은 배지 클릭 시 펼친다.
+function aiReasonRow(a){
+  if(!a.ai_fit || !a.ai_reason) return '';
+  const open = a.ai_fit === 'unsure' ? ' show' : '';
+  return `<div class="ai-reason ${a.ai_fit}${open}" data-ai-reason="${esc(a.id)}">
+    <span class="ai-reason-tag">AI 판정 근거</span>
+    <span class="ai-reason-text">${esc(a.ai_reason)}</span>
+  </div>`;
 }
 
 function noticeHTML(a){
@@ -90,6 +103,7 @@ function noticeHTML(a){
         <span class="badge ${a.dday != null && a.dday <= 7 && a.dday >= 0 ? 'urgent' : ''}">${esc(ddayText(a))}</span>
         ${aiFitBadge(a)}
       </div>
+      ${aiReasonRow(a)}
     </div>
     <div class="right"><button class="star ${a.favorite?'on':''}" data-star="${esc(a.id)}">${a.favorite?'★':'☆'}</button></div>
     <div class="detail">
@@ -144,8 +158,13 @@ function bindNoticeEvents(root){
       renderList();
     }catch(err){ alert(err.message); }
   }));
+  root.querySelectorAll('[data-ai-toggle]').forEach(badge=>badge.addEventListener('click', e=>{
+    e.stopPropagation();
+    const row = root.querySelector(`[data-ai-reason="${CSS.escape(badge.dataset.aiToggle)}"]`);
+    if(row) row.classList.toggle('show');
+  }));
   root.querySelectorAll('.notice').forEach(row=>row.addEventListener('click', e=>{
-    if(e.target.closest('a,button')) return;
+    if(e.target.closest('a,button,[data-ai-toggle],.ai-reason')) return;
     row.classList.toggle('open-detail');
   }));
 }

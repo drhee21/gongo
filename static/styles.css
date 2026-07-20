@@ -40,6 +40,15 @@ input,select{background:var(--panel2);border:1px solid var(--line);color:var(--t
 .badge.ai{border:1px solid rgba(124,58,237,.35);color:var(--ai)}
 .badge.ai.open{color:var(--ok);border-color:rgba(22,163,74,.35)}
 .badge.ai.closed{color:var(--danger);border-color:rgba(220,38,38,.35)}
+.badge.ai.ai-trigger{cursor:pointer;user-select:none}
+.ai-caret{margin-left:4px;font-size:9px;opacity:.6}
+.ai-reason{display:none;margin-top:8px;padding:9px 11px;border-radius:8px;font-size:13px;line-height:1.55;background:var(--panel2);border-left:3px solid var(--ai)}
+.ai-reason.show{display:block}
+.ai-reason.unsure{border-left-color:var(--warn);background:rgba(217,119,6,.06)}
+.ai-reason.open{border-left-color:var(--ok)}
+.ai-reason.closed{border-left-color:var(--danger)}
+.ai-reason-tag{display:block;font-size:11px;font-weight:700;color:var(--muted);margin-bottom:2px}
+.ai-reason-text{color:var(--text)}
 .right{display:flex;gap:8px;align-items:center}
 .star{background:transparent;border:0;color:var(--muted);font-size:26px;cursor:pointer}
 .star.on{color:var(--warn)}
