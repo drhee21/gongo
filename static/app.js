@@ -105,7 +105,10 @@ function noticeHTML(a){
       </div>
       ${aiReasonRow(a)}
     </div>
-    <div class="right"><button class="star ${a.favorite?'on':''}" data-star="${esc(a.id)}">${a.favorite?'★':'☆'}</button></div>
+    <div class="right">
+      <button class="star ${a.favorite?'on':''}" data-star="${esc(a.id)}">${a.favorite?'★':'☆'}</button>
+      <button class="detail-toggle" data-detail-toggle="${esc(a.id)}" aria-expanded="false">상세 <span class="detail-caret">▾</span></button>
+    </div>
     <div class="detail">
       <div class="meta"><b>지원규모</b> ${esc(a.budget || '공고 참조')}</div>
       <div class="meta"><b>신청자격</b> ${esc(eligText(a.elig))}</div>
@@ -163,9 +166,12 @@ function bindNoticeEvents(root){
     const row = root.querySelector(`[data-ai-reason="${CSS.escape(badge.dataset.aiToggle)}"]`);
     if(row) row.classList.toggle('show');
   }));
-  root.querySelectorAll('.notice').forEach(row=>row.addEventListener('click', e=>{
-    if(e.target.closest('a,button,[data-ai-toggle],.ai-reason')) return;
-    row.classList.toggle('open-detail');
+  root.querySelectorAll('[data-detail-toggle]').forEach(btn=>btn.addEventListener('click', e=>{
+    e.stopPropagation();
+    const row = root.querySelector(`.notice[data-id="${CSS.escape(btn.dataset.detailToggle)}"]`);
+    if(!row) return;
+    const open = row.classList.toggle('open-detail');
+    btn.setAttribute('aria-expanded', String(open));
   }));
 }
 

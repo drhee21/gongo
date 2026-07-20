@@ -49,9 +49,13 @@ input,select{background:var(--panel2);border:1px solid var(--line);color:var(--t
 .ai-reason.closed{border-left-color:var(--danger)}
 .ai-reason-tag{display:block;font-size:11px;font-weight:700;color:var(--muted);margin-bottom:2px}
 .ai-reason-text{color:var(--text)}
-.right{display:flex;gap:8px;align-items:center}
-.star{background:transparent;border:0;color:var(--muted);font-size:26px;cursor:pointer}
+.right{display:flex;flex-direction:column;gap:6px;align-items:flex-end}
+.star{background:transparent;border:0;color:var(--muted);font-size:26px;cursor:pointer;align-self:flex-end}
 .star.on{color:var(--warn)}
+.detail-toggle{background:transparent;border:1px solid var(--line);color:var(--muted);font-size:12px;border-radius:999px;padding:5px 10px;cursor:pointer;white-space:nowrap}
+.detail-toggle:hover{color:var(--brand);border-color:var(--brand)}
+.detail-caret{display:inline-block;transition:transform .15s ease}
+.notice.open-detail .detail-caret{transform:rotate(180deg)}
 .detail{grid-column:2/4;border-top:1px solid var(--line);margin-top:6px;padding-top:12px;display:none}
 .notice.open-detail .detail{display:block}
 .detail a{color:var(--brand)}
