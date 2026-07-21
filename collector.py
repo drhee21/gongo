@@ -765,44 +765,26 @@ def compact_biohub_title(title: str) -> str:
     return clean(title)
 
 
-def choose_biohub_title(soup: BeautifulSoup, lines: List[str]) -> str:
-    # 1) OpenGraph/메타 제목
-    for attrs in [
-        {"property": "og:title"},
-        {"name": "title"},
-        {"name": "subject"},
-    ]:
-        tag = soup.find("meta", attrs=attrs)
-        if tag and clean(tag.get("content")):
-            t = compact_biohub_title(tag.get("content"))
-            if len(t) >= 8 and "서울바이오허브" not in {t}:
-                return t
+def choose_biohub_title(soup: BeautifulSoup) -> str:
+    # 서울바이오허브 상세 페이지는 실제 공고명을 두 곳에 그대로 담고 있다:
+    # 1) hidden input(name="title") — 상세 페이지 뷰 폼이 제출하는 원본 값
+    # 2) p.pop-cont-title > strong — 화면에 보이는 제목 영역
+    # 두 값은 실사용 페이지들에서 항상 일치함을 확인했다. meta 태그(og:title 등)는
+    # 이 사이트에서는 사이트 공용 값("Seoulbiohub")이거나 애초에 존재하지 않고,
+    # 본문 헤딩(h1~h6/strong/b) 스캔은 페이지 상단 접근성 링크나 개인정보 재동의
+    # 모달 텍스트를 오탐하기 쉬워 전부 제거했다.
+    title_input = soup.find("input", attrs={"name": "title"})
+    if title_input and clean(title_input.get("value")):
+        t = compact_biohub_title(title_input.get("value"))
+        if len(t) >= 8 and "서울바이오허브" not in {t}:
+            return t
 
-    # 2) 본문 상단 제목 후보. 서울바이오허브는 상세 페이지 본문에 제목이 여러 번 반복된다.
-    candidates: List[str] = []
-    for tag in soup.find_all(["h1", "h2", "h3", "h4", "h5", "strong", "b"]):
-        t = compact_biohub_title(tag.get_text(" ", strip=True))
-        if 8 <= len(t) <= 180:
-            candidates.append(t)
-    for line in lines[:80]:
-        t = compact_biohub_title(line)
-        if 8 <= len(t) <= 180 and any(k in t for k in ["공고", "모집", "프로그램", "오픈", "IR", "입주"]):
-            candidates.append(t)
-    bad = ["개인정보", "신청자 정보", "회원 가입", "예약신청", "프로그램 더보기", "홍보센터", "고객지원", "Image:"]
-    filtered = []
-    for t in candidates:
-        if any(b in t for b in bad):
-            continue
-        # category prefix가 붙는 경우 정리
-        t = re.sub(r"^(입주기업 모집|행사/세미나|IR/파트너링|오픈이노베이션|지원사업)\s+", "", t).strip()
-        if t and t not in filtered:
-            filtered.append(t)
-    if filtered:
-        # '공고명: ...'처럼 더 구체적인 후보를 우선
-        for t in filtered:
-            if "공고" in t or "모집" in t:
-                return t
-        return filtered[0]
+    pop_title = soup.select_one("p.pop-cont-title strong")
+    if pop_title:
+        t = compact_biohub_title(pop_title.get_text(" ", strip=True))
+        if len(t) >= 8 and "서울바이오허브" not in {t}:
+            return t
+
     return "서울바이오허브 공고"
 
 
@@ -874,7 +856,7 @@ def parse_biohub_detail(url: str, html: str) -> Optional[Dict[str, Any]]:
     if not any(k in text for k in ["신청기간", "모집기간", "접수기간", "신청 마감", "모집대상", "지원자격", "지원내용", "공고명"]):
         return None
 
-    title = choose_biohub_title(soup, lines)
+    title = choose_biohub_title(soup)
     if title == "서울바이오허브 공고" and not any(k in text for k in ["공고", "모집", "프로그램"]):
         return None
 
