@@ -67,6 +67,7 @@ def init_db() -> None:
                 elig_json TEXT,
                 url TEXT,
                 raw_json TEXT,
+                dates_unknown INTEGER DEFAULT 0,
                 first_seen_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
@@ -176,6 +177,7 @@ def init_db() -> None:
         _ensure_column(con, "users", "is_admin", "INTEGER DEFAULT 0")
         _ensure_column(con, "sources", "anomaly", "INTEGER DEFAULT 0")
         _ensure_column(con, "sources", "anomaly_note", "TEXT")
+        _ensure_column(con, "notices", "dates_unknown", "INTEGER DEFAULT 0")
 
 
 def upsert_notices(items: Iterable[Dict[str, Any]], prune: bool = True) -> int:
@@ -203,8 +205,8 @@ def upsert_notices(items: Iterable[Dict[str, Any]], prune: bool = True) -> int:
                 """
                 INSERT INTO notices (
                     id, source, title, org, category, start_date, end_date,
-                    budget, elig_json, url, raw_json, first_seen_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    budget, elig_json, url, raw_json, dates_unknown, first_seen_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     source=excluded.source,
                     title=excluded.title,
@@ -216,6 +218,7 @@ def upsert_notices(items: Iterable[Dict[str, Any]], prune: bool = True) -> int:
                     elig_json=excluded.elig_json,
                     url=excluded.url,
                     raw_json=excluded.raw_json,
+                    dates_unknown=excluded.dates_unknown,
                     updated_at=excluded.updated_at
                 """,
                 (
@@ -230,6 +233,7 @@ def upsert_notices(items: Iterable[Dict[str, Any]], prune: bool = True) -> int:
                     json.dumps(a.get("elig"), ensure_ascii=False) if a.get("elig") is not None else None,
                     a.get("url") or "",
                     json.dumps(a, ensure_ascii=False),
+                    1 if a.get("dates_unknown") else 0,
                     ts,
                     ts,
                 ),
@@ -387,6 +391,7 @@ def row_to_notice(row: sqlite3.Row) -> Dict[str, Any]:
         "end": row["end_date"],
         "budget": row["budget"],
         "elig": elig,
+        "dates_unknown": bool(row["dates_unknown"]) if "dates_unknown" in row.keys() else False,
         "url": row["url"],
         "favorite": bool(row["favorite"]),
         "first_seen_at": row["first_seen_at"],

@@ -186,6 +186,7 @@ def normalize(src: str, title: Any, org: Any, category: Any, start: Optional[str
         "elig": elig,
         "url": url_s,
         "raw": raw or {},
+        "dates_unknown": False,
     }
 
 
@@ -610,6 +611,11 @@ def collect_board(source_id: str, bcfg: Dict[str, Any], common: Dict[str, Any]) 
         r.encoding = r.apparent_encoding
     soup = BeautifulSoup(r.text, "html.parser")
     pattern = re.compile(bcfg.get("link_pattern") or "view|View|bbs|notice", re.I)
+    # 일부 게시판은 목록 행에 신청기간이 아예 노출되지 않고 작성일(게시일)만 있어서,
+    # row_text에서 날짜를 뽑으면 작성일을 신청 시작일로 잘못 표시하게 된다. 이런
+    # 게시판은 config에서 "dates_reliable": false로 표시해 날짜 추출 자체를
+    # 건너뛰고, 화면에는 날짜 미상으로 표시되게 한다(잘못된 날짜보다 낫다).
+    dates_reliable = bcfg.get("dates_reliable", True)
     seen = set()
     out: List[Dict[str, Any]] = []
     for a in soup.find_all("a", href=True):
@@ -626,14 +632,24 @@ def collect_board(source_id: str, bcfg: Dict[str, Any], common: Dict[str, Any]) 
         parent = a.find_parent(["tr", "li", "article", "div"]) or a.parent
         row_text = clean(parent.get_text(" ", strip=True) if parent else title)
         start = end = None
-        if re.search(r"[~∼〜]", row_text):
-            start, end = parse_period(row_text)
-        else:
-            m = re.search(r"마감[^0-9]{0,8}(20\d{2}[.\-/년\s]*\d{1,2}[.\-/월\s]*\d{1,2})", row_text)
-            if m:
-                end = parse_date(m.group(1))
-            start = parse_date(row_text)
-        out.append(normalize(source_id, title, bcfg.get("org") or bcfg.get("name"), bcfg.get("category") or "R&D", start, end, url, raw={"row_text": row_text}))
+        if dates_reliable:
+            if re.search(r"[~∼〜]", row_text):
+                start, end = parse_period(row_text)
+            else:
+                m = re.search(r"마감[^0-9]{0,8}(20\d{2}[.\-/년\s]*\d{1,2}[.\-/월\s]*\d{1,2})", row_text)
+                if m:
+                    end = parse_date(m.group(1))
+                start = parse_date(row_text)
+        item = normalize(source_id, title, bcfg.get("org") or bcfg.get("name"), bcfg.get("category") or "R&D", start, end, url, raw={"row_text": row_text})
+        if not dates_reliable:
+            # normalize()는 start가 비어 있으면 오늘 날짜로 채우는데, 그러면 "오늘부터
+            # 접수중"으로 잘못 보이므로 여기서 명시적으로 다시 비운다. dates_unknown을
+            # 표시해 화면에서 "상시"(마감 없음, 진짜 데이터)와 "날짜 미상"(마감이
+            # 있을 텐데 목록에서 못 읽음)을 구분할 수 있게 한다.
+            item["start"] = None
+            item["end"] = None
+            item["dates_unknown"] = True
+        out.append(item)
         if len(out) >= int(common.get("max_items_per_source", 60)):
             break
     if not out:

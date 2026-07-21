@@ -56,6 +56,8 @@ def status_of(a: Dict[str, Any]) -> str:
     end = a.get("end")
     start = a.get("start")
     today = datetime.now().date()
+    if a.get("dates_unknown"):
+        return "날짜 미상"
     if not end:
         return "상시"
     try:
