@@ -59,7 +59,10 @@ def status_of(a: Dict[str, Any]) -> str:
     if a.get("dates_unknown"):
         return "날짜 미상"
     if not end:
-        return "상시"
+        # 상시/수시/소진 같은 명시적 표현으로 확인된 경우만 진짜 상시로 보여준다.
+        # 그런 표현 없이 시작일만 알고 마감일을 못 찾은 경우("확인필요")까지
+        # 상시로 잘못 단정하지 않는다.
+        return "상시" if a.get("rolling_confirmed") else "확인필요"
     try:
         e = datetime.strptime(end, "%Y-%m-%d").date()
         if e < today:

@@ -95,11 +95,41 @@ def parse_date(text: Any, prefer_last: bool = False) -> Optional[str]:
     return found[-1] if prefer_last else found[0]
 
 
+ROLLING_KEYWORDS_RE = re.compile(r"상시|수시|소진|예산\s*소진|완료\s*시|선착순")
+
+
+def mark_dates_unknown_if_needed(item: Dict[str, Any], source_text: str, start_was_known: bool = False) -> None:
+    """end 날짜를 못 찾았을 때 처리 방식을 소스 전체에 걸쳐 통일한다.
+
+    - 원문에 "상시/수시/소진" 같은 명시적 표현이 있으면 진짜로 마감이 없는
+      공고이므로 상시 그대로 둔다(손대지 않음).
+    - 시작일을 실제로 찾은 경우(start_was_known=True)는 마감일만 못 찾은
+      것이므로 dates_unknown으로 올리지 않는다 — 이미 아는 시작일 정보를
+      날짜 미상 처리로 지워버리면 안 된다. end만 비워서 "-"로 보이게 한다.
+      (normalize()가 start를 항상 오늘 날짜로 채워주기 때문에
+      item.get("start")만으로는 "진짜로 찾았는지"를 알 수 없어, 호출부에서
+      정규식 매칭 직후의 원본 start 값을 start_was_known으로 넘겨받는다.)
+    - 시작일도 못 찾았고 그런 표현도 없으면, 이 공고의 날짜에 대해 아는 게
+      전혀 없는 것이므로 dates_unknown을 표시해 "날짜 미상"으로 보이게
+      한다(상시로 지어내지 않음).
+    """
+    if item.get("end"):
+        return
+    if ROLLING_KEYWORDS_RE.search(source_text or ""):
+        item["rolling_confirmed"] = True
+        return
+    item["end"] = None
+    if start_was_known:
+        return
+    item["start"] = None
+    item["dates_unknown"] = True
+
+
 def parse_period(text: Any) -> Tuple[Optional[str], Optional[str]]:
     if not text:
         return None, None
     t = str(text)
-    if re.search(r"상시|수시|소진|예산\s*소진", t):
+    if ROLLING_KEYWORDS_RE.search(t):
         return None, None
     parts = re.split(r"[~∼〜–]|(?<=\d)\s+-\s+(?=20\d{2})", t)
     if len(parts) >= 2:
@@ -187,6 +217,7 @@ def normalize(src: str, title: Any, org: Any, category: Any, start: Optional[str
         "url": url_s,
         "raw": raw or {},
         "dates_unknown": False,
+        "rolling_confirmed": False,
     }
 
 
@@ -238,7 +269,8 @@ def collect_bizinfo(cfg: Dict[str, Any], route: Dict[str, List[str]]) -> Dict[st
         title = pick(it, "pblancNm", "title", "bizNm")
         if not title:
             continue
-        start, end = parse_period(pick(it, "reqstBeginEndDe", "reqstDt", "period"))
+        period_text = pick(it, "reqstBeginEndDe", "reqstDt", "period")
+        start, end = parse_period(period_text)
         rel_url = clean(pick(it, "pblancUrl", "url") or "")
         url = urljoin("https://www.bizinfo.go.kr", rel_url)
         org = pick(it, "jrsdInsttNm", "excInsttNm", "insttNm")
@@ -253,7 +285,9 @@ def collect_bizinfo(cfg: Dict[str, Any], route: Dict[str, List[str]]) -> Dict[st
             if any(kw and kw in haystack for kw in keywords):
                 src = route_src
                 break
-        out.setdefault(src, []).append(normalize(src, title, org, cat, start, end, url, elig=elig_from_text(target, title, haystack), raw=it))
+        item = normalize(src, title, org, cat, start, end, url, elig=elig_from_text(target, title, haystack), raw=it)
+        mark_dates_unknown_if_needed(item, period_text or "", start_was_known=bool(start))
+        out.setdefault(src, []).append(item)
     return out
 
 
@@ -345,12 +379,12 @@ def collect_g2b(cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
                 except (TypeError, ValueError):
                     budget = "공고 참조"
                 org = pick(it, "ntceInsttNm", "dminsttNm")
-                out.append(
-                    normalize(
-                        "g2b", title, org, "나라장터 입찰", start, end, url,
-                        budget=budget, elig=elig_from_text(title, haystack), raw=it,
-                    )
+                g2b_item = normalize(
+                    "g2b", title, org, "나라장터 입찰", start, end, url,
+                    budget=budget, elig=elig_from_text(title, haystack), raw=it,
                 )
+                mark_dates_unknown_if_needed(g2b_item, haystack, start_was_known=bool(start))
+                out.append(g2b_item)
 
             if len(items) < num_of_rows:
                 break
@@ -491,8 +525,6 @@ def parse_kstartup_html_items(html: str, page_url: str, max_items: int = 80) -> 
             start = m_start.group(1)
         if m_end:
             end = m_end.group(1)
-        if not end:
-            continue
 
         title_candidates = []
         for line in block[1:8]:
@@ -539,6 +571,12 @@ def parse_kstartup_html_items(html: str, page_url: str, max_items: int = 80) -> 
             elig=elig,
             raw=raw,
         )
+        # 마감일자 라벨이 없거나 값 형식이 안 맞아 못 뽑았을 때, 예전엔 이 카드를
+        # 통째로 버렸다. 페이지 구조가 바뀌었는지(전체 실패) 여부는 이 함수가 결과를
+        # 0건 반환했을 때 collect_kstartup()이 이미 예외로 잡아내므로, 개별 카드
+        # 하나가 날짜를 못 찾았다고 그 카드까지 버릴 필요는 없다 — 상시류 표현이
+        # 있으면 상시로, 없으면 날짜 미상으로 남기고 카드 자체는 보여준다.
+        mark_dates_unknown_if_needed(item, joined, start_was_known=bool(start or reg))
         out.append(item)
         if len(out) >= max_items:
             break
@@ -660,19 +698,24 @@ def collect_board(source_id: str, bcfg: Dict[str, Any], common: Dict[str, Any]) 
                     end = parse_date(m.group(1))
                 start = parse_date(row_text)
         item = normalize(source_id, title, bcfg.get("org") or bcfg.get("name"), bcfg.get("category") or "R&D", start, end, url, raw={"row_text": row_text})
-        if not dates_reliable:
+        if dates_reliable:
+            # 정상적으로 range/마감 패턴을 찾았으면 그대로 두고, 못 찾았으면
+            # row_text에 상시류 표현이 있는지 확인해 날짜 미상 여부를 정한다.
+            mark_dates_unknown_if_needed(item, row_text, start_was_known=bool(start))
+        else:
             # normalize()는 start가 비어 있으면 오늘 날짜로 채우는데, 그러면 "오늘부터
             # 접수중"으로 잘못 보이므로 여기서 명시적으로 다시 비운다.
             item["start"] = None
             item["end"] = None
             # row_text에 신청기간이 없어도 제목 자체에 마감일이 박혀 있는 경우가
             # 있다("~7.20.(월)" 등). 이걸 뽑을 수 있으면 정확한 마감일을 쓰고,
-            # 못 뽑으면(제목에 날짜 표기가 아예 없으면) 날짜 미상으로 남긴다.
+            # 못 뽑으면 row_text/제목에 상시류 표현이 있는지 확인한 뒤 그마저
+            # 없으면 날짜 미상으로 남긴다.
             title_end = parse_title_end_date(title)
             if title_end:
                 item["end"] = title_end
             else:
-                item["dates_unknown"] = True
+                mark_dates_unknown_if_needed(item, row_text)
         out.append(item)
         if len(out) >= int(common.get("max_items_per_source", 60)):
             break
@@ -736,10 +779,12 @@ def parse_iris_list_items(html: str) -> List[Dict[str, Any]]:
                 etc[label] = value
 
         elig = elig_from_text(title, etc.get("세부사업명", ""), etc.get("사업공고명", ""))
-        out.append(normalize(
+        nrf_item = normalize(
             "nrf", title, org or "한국연구재단", "R&D", start, end, detail_url,
             budget="공고 참조", elig=elig, raw={"collector": "nrf_iris", "inst": inst, **etc},
-        ))
+        )
+        mark_dates_unknown_if_needed(nrf_item, li.get_text(" ", strip=True), start_was_known=bool(start))
+        out.append(nrf_item)
     return out
 
 
@@ -908,7 +953,7 @@ def parse_biohub_detail(url: str, html: str) -> Optional[Dict[str, Any]]:
     budget = extract_biohub_budget(lines, text)
     category = guess_biohub_category(title, text)
     elig = elig_from_text(title, text[:3500])
-    return normalize(
+    biohub_item = normalize(
         "biohub",
         title,
         "서울바이오허브",
@@ -920,6 +965,8 @@ def parse_biohub_detail(url: str, html: str) -> Optional[Dict[str, Any]]:
         elig=elig,
         raw={"collector": "biohub_direct", "text_head": text[:1200]},
     )
+    mark_dates_unknown_if_needed(biohub_item, text, start_was_known=bool(start))
+    return biohub_item
 
 
 def discover_biohub_program_ids_from_list_html(html: str) -> List[Tuple[str, str]]:

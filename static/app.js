@@ -37,11 +37,11 @@ function sourceName(id){
 function statusClass(st){
   if(st==='접수중' || st==='상시') return 'open';
   if(st==='마감') return 'closed';
-  if(st==='날짜 미상') return '';
+  if(st==='날짜 미상' || st==='확인필요') return '';
   return 'urgent';
 }
 function ddayText(a){
-  if(a.status==='상시' || a.status==='날짜 미상') return a.status;
+  if(a.status==='상시' || a.status==='날짜 미상' || a.status==='확인필요') return a.status;
   if(a.dday == null) return a.status || '확인';
   if(a.dday < 0) return '마감';
   if(a.dday === 0) return 'D-DAY';
@@ -98,7 +98,7 @@ function noticeHTML(a){
     <div class="src-group">${srcBadges}</div>
     <div>
       <h3>${esc(a.title)}</h3>
-      <div class="meta">${esc(a.org)} · ${esc(a.category)} · ${a.dates_unknown ? '날짜 미상' : `${esc(a.start || '-')} ~ ${esc(a.end || '상시')}`}</div>
+      <div class="meta">${esc(a.org)} · ${esc(a.category)} · ${a.dates_unknown ? '날짜 미상' : `${esc(a.start || '-')} ~ ${a.end ? esc(a.end) : (a.status === '상시' ? '상시' : '-')}`}</div>
       <div class="badges">
         <span class="badge ${statusClass(a.status)}">${esc(a.status)}</span>
         ${ddayText(a) !== a.status ? `<span class="badge ${a.dday != null && a.dday <= 7 && a.dday >= 0 ? 'urgent' : ''}">${esc(ddayText(a))}</span>` : ''}
