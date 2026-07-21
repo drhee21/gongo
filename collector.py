@@ -596,6 +596,25 @@ def robots_allows(url: str) -> bool:
         return True
 
 
+TITLE_END_DATE_RE = re.compile(r"~\s*(\d{1,2})\s*[./]\s*(\d{1,2})")
+
+
+def parse_title_end_date(title: str) -> Optional[str]:
+    """제목에 흔히 붙는 '(~7.20.(월))', '(~7/30(목) 16:00)' 같은 마감일 표기에서
+    월/일만 뽑아 마감일을 추정한다. 목록 행에 신청기간이 없는 게시판(예:
+    khidi_direct)에서 dates_reliable=false여도, 최소한 제목에 마감일이 박혀
+    있는 공고는 정확한 마감일을 보여줄 수 있다. 연도는 명시되지 않으므로
+    parse_period()의 기존 관행과 동일하게 현재 연도를 사용한다."""
+    m = TITLE_END_DATE_RE.search(title)
+    if not m:
+        return None
+    mo, d = int(m.group(1)), int(m.group(2))
+    year = date.today().year
+    if not valid_ymd(year, mo, d):
+        return None
+    return f"{year:04d}-{mo:02d}-{d:02d}"
+
+
 def collect_board(source_id: str, bcfg: Dict[str, Any], common: Dict[str, Any]) -> List[Dict[str, Any]]:
     if not bcfg.get("enabled", False):
         raise RuntimeError("비활성화됨")
@@ -643,12 +662,17 @@ def collect_board(source_id: str, bcfg: Dict[str, Any], common: Dict[str, Any]) 
         item = normalize(source_id, title, bcfg.get("org") or bcfg.get("name"), bcfg.get("category") or "R&D", start, end, url, raw={"row_text": row_text})
         if not dates_reliable:
             # normalize()는 start가 비어 있으면 오늘 날짜로 채우는데, 그러면 "오늘부터
-            # 접수중"으로 잘못 보이므로 여기서 명시적으로 다시 비운다. dates_unknown을
-            # 표시해 화면에서 "상시"(마감 없음, 진짜 데이터)와 "날짜 미상"(마감이
-            # 있을 텐데 목록에서 못 읽음)을 구분할 수 있게 한다.
+            # 접수중"으로 잘못 보이므로 여기서 명시적으로 다시 비운다.
             item["start"] = None
             item["end"] = None
-            item["dates_unknown"] = True
+            # row_text에 신청기간이 없어도 제목 자체에 마감일이 박혀 있는 경우가
+            # 있다("~7.20.(월)" 등). 이걸 뽑을 수 있으면 정확한 마감일을 쓰고,
+            # 못 뽑으면(제목에 날짜 표기가 아예 없으면) 날짜 미상으로 남긴다.
+            title_end = parse_title_end_date(title)
+            if title_end:
+                item["end"] = title_end
+            else:
+                item["dates_unknown"] = True
         out.append(item)
         if len(out) >= int(common.get("max_items_per_source", 60)):
             break
