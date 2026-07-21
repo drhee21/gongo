@@ -740,8 +740,6 @@ def collect_nrf_iris(bcfg: Dict[str, Any], common: Dict[str, Any]) -> List[Dict[
 
 # ──────────────────────────── 서울바이오허브 전용 수집기 ────────────────────────────
 
-BIOHUB_DEFAULT_GUBUNS = ["14", "08", "09", "04", "03", "12"]
-
 
 def guess_biohub_category(title: str, text: str) -> str:
     hay = f"{title} {text}"
@@ -856,8 +854,14 @@ def parse_biohub_detail(url: str, html: str) -> Optional[Dict[str, Any]]:
     if not any(k in text for k in ["신청기간", "모집기간", "접수기간", "신청 마감", "모집대상", "지원자격", "지원내용", "공고명"]):
         return None
 
+    # choose_biohub_title은 실제 공고면 hidden input(name="title") 또는
+    # p.pop-cont-title에서 원본 공고명을 반환하고, 유령/빈 템플릿 페이지면
+    # 이 둘이 모두 없어 아래 placeholder를 반환한다. 따라서 placeholder가 곧
+    # "실제 공고가 아님" 신호이므로 그대로 버린다. (예전엔 여기에
+    # `and not any("공고"/"모집"/"프로그램" in text)` 예외를 뒀는데, 전역 메뉴에
+    # "모집"/"프로그램"이 항상 들어 있어 유령 페이지를 걸러내지 못했다.)
     title = choose_biohub_title(soup)
-    if title == "서울바이오허브 공고" and not any(k in text for k in ["공고", "모집", "프로그램"]):
+    if title == "서울바이오허브 공고":
         return None
 
     start, end = extract_biohub_period(lines, text)
@@ -878,42 +882,42 @@ def parse_biohub_detail(url: str, html: str) -> Optional[Dict[str, Any]]:
     )
 
 
-def discover_biohub_links_from_html(html: str, base_url: str, pattern: str) -> List[str]:
-    soup = BeautifulSoup(html, "html.parser")
-    pat = re.compile(pattern or r"supportManageView\.do|seq=", re.I)
-    urls: List[str] = []
-    seen = set()
-    for a in soup.find_all("a", href=True):
-        href = a.get("href", "")
-        if not pat.search(href):
+def discover_biohub_program_ids_from_list_html(html: str) -> List[Tuple[str, str]]:
+    """목록 페이지(supportManageListPage.do) HTML에서 실제 존재하는 (seq, gubun) 쌍을
+    전부 추출한다. 각 카드는 `supportManageViewPage('seq','gubun')` 형태의 JS 호출을
+    이미지 링크와 "신청하기" 버튼 두 곳에 중복으로 담고 있으므로, seq 기준으로 먼저
+    나온 것만 남긴다. gubun을 사이트가 알려주는 값을 그대로 쓰므로 gubun을 추측하거나
+    여러 값을 대입해볼 필요가 없다."""
+    seen: set = set()
+    pairs: List[Tuple[str, str]] = []
+    for m in re.finditer(r"supportManageViewPage\('(\d+)'\s*,\s*'(\w+)'\)", html):
+        seq, gubun = m.group(1), m.group(2)
+        if seq in seen:
             continue
-        url = urljoin(base_url, href)
-        if url not in seen:
-            seen.add(url)
-            urls.append(url)
-    # HTML 안에 문자열로 들어간 view URL도 보완 추출
-    for m in re.finditer(r"supportManageView\.do\?[^\"'<>\s]+", html):
-        url = urljoin(base_url, m.group(0).replace("&amp;", "&"))
-        if url not in seen:
-            seen.add(url)
-            urls.append(url)
-    return urls
+        seen.add(seq)
+        pairs.append((seq, gubun))
+    return pairs
 
 
-def biohub_seq_urls(bcfg: Dict[str, Any]) -> List[str]:
-    base_url = clean(bcfg.get("base_url")) or "https://www.seoulbiohub.kr"
-    gubuns = bcfg.get("gubun_list") or BIOHUB_DEFAULT_GUBUNS
-    try:
-        seq_start = int(bcfg.get("seq_start") or 730)
-        seq_end = int(bcfg.get("seq_end") or 790)
-    except Exception:
-        seq_start, seq_end = 730, 790
-    urls: List[str] = []
-    # 최신 seq가 큰 쪽일 가능성이 높으므로 역순 탐색
-    for seq in range(seq_end, seq_start - 1, -1):
-        for g in gubuns:
-            urls.append(f"{base_url}/front/supportManageReq/supportManageView.do?gubun={g}&seq={seq}")
-    return urls
+def fetch_biohub_program_list(
+    base_url: str, timeout: int, page_size: int, list_url: Optional[str] = None
+) -> List[Tuple[str, str]]:
+    """목록 페이지를 POST로 요청해 (seq, gubun) 전체를 가져온다.
+
+    이 페이지는 서버에서 렌더링되어 반환되므로(클라이언트 JS 없이도 GET만으로 1페이지
+    분량은 보이지만), 게시판 폼의 miv_pageNo/miv_pageSize 파라미터를 그대로 POST로
+    보내면 페이지네이션 없이 한 번의 요청으로 원하는 만큼의 이력을 받을 수 있다.
+
+    `list_url`을 넘기면 그 URL을 그대로 쓴다 — 관리자 화면의 "소스 URL 재정의"
+    패널(server.py의 OVERRIDABLE_SOURCES)로 사이트 구조 변경에 대응할 수 있도록
+    하기 위함이다. 넘기지 않으면 base_url 기준 기본 경로를 사용한다.
+    """
+    url = clean(list_url) or f"{base_url}/front/supportManageReq/supportManageListPage.do"
+    r = SESSION.post(url, data={"miv_pageNo": "1", "miv_pageSize": str(page_size)}, timeout=timeout)
+    r.raise_for_status()
+    if not r.encoding or r.encoding.lower() == "iso-8859-1":
+        r.encoding = r.apparent_encoding
+    return discover_biohub_program_ids_from_list_html(r.text)
 
 
 def collect_biohub_direct(bcfg: Dict[str, Any], common: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -921,17 +925,22 @@ def collect_biohub_direct(bcfg: Dict[str, Any], common: Dict[str, Any]) -> List[
 
     일반 게시판 크롤러와 달리 서울바이오허브는 상세 URL인
     supportManageView.do?gubun=..&seq=.. 페이지를 직접 파싱한다.
-    1) list_url에서 상세 링크를 먼저 발견하고,
-    2) config의 seed_urls를 보조로 쓰고,
-    3) 필요 시 최근 seq 범위를 스캔한다.
+    1) 목록 페이지(supportManageListPage.do)를 POST로 조회해 실제 존재하는
+       (seq, gubun) 쌍을 전부 가져온다. seq를 추측하지 않고 gubun도 사이트가
+       알려주는 값을 그대로 쓰므로, 존재하지 않는 seq에 대한 유령 페이지나
+       잘못된 gubun 조합으로 인한 낭비/오탐이 원천적으로 발생하지 않는다.
+    2) 위 방식이 실패하면(사이트 구조 변경 등) config의 seed_urls로 보완한다.
+       (예전에는 여기서 seq 범위를 추측 스캔하는 3단계가 더 있었으나, 1)이
+       실제 목록을 정확히 가져오게 되면서 추측 스캔은 항상 유령 페이지만
+       만들어내는 순수 손해였으므로 완전히 제거했다.)
     """
     if not bcfg.get("enabled", False):
         raise RuntimeError("비활성화됨")
     base_url = clean(bcfg.get("base_url")) or "https://www.seoulbiohub.kr"
-    pattern = bcfg.get("link_pattern") or r"supportManageView\.do|seq="
     timeout = common.get("timeout_sec", 20)
     max_items = int(common.get("max_items_per_source", 80))
     delay = float(bcfg.get("detail_delay_sec", 0.06))
+    max_detail_pages = int(bcfg.get("max_detail_pages", max(180, max_items * 6)))
 
     if common.get("respect_robots", True):
         probe = f"{base_url}/front/supportManageReq/supportManageView.do"
@@ -952,37 +961,31 @@ def collect_biohub_direct(bcfg: Dict[str, Any], common: Dict[str, Any]) -> List[
             seen.add(u)
             candidates.append(u)
 
-    # 1) list_url에서 상세 링크 발견. totalSearch.do처럼 GET이 막혀도 실패만 기록하고 다음 단계 진행.
-    list_urls = bcfg.get("list_urls") or [bcfg.get("list_url")]
-    for lu in list_urls:
-        lu = clean(lu)
-        if not lu or lu.startswith("TODO"):
-            continue
-        try:
-            if common.get("respect_robots", True) and not robots_allows(lu):
-                continue
-            r = SESSION.get(lu, timeout=timeout)
-            if r.status_code >= 400:
-                continue
-            if not r.encoding or r.encoding.lower() == "iso-8859-1":
-                r.encoding = r.apparent_encoding
-            for u in discover_biohub_links_from_html(r.text, base_url, pattern):
-                add_url(u)
-        except Exception:
-            continue
+    # 1) 목록 페이지를 POST로 조회해 (seq, gubun) 쌍을 가져온다. list_url이 설정되어
+    #    있으면 그 값을 쓰고(관리자 URL 재정의 대응), 없으면 base_url 기준 기본
+    #    경로를 쓴다. 요청이 막히면(예: 사이트가 구조를 바꿔 이 엔드포인트가
+    #    사라진 경우) 실패만 기록하고 아래 fallback 단계로 넘어간다.
+    list_url = clean(bcfg.get("list_url") or bcfg.get("list_urls", [None])[0] or "") or None
+    effective_list_url = list_url or f"{base_url}/front/supportManageReq/supportManageListPage.do"
+    try:
+        if not (common.get("respect_robots", True) and not robots_allows(effective_list_url)):
+            pairs = fetch_biohub_program_list(
+                base_url, timeout,
+                page_size=bcfg.get("list_page_size", max(400, max_detail_pages)),
+                list_url=list_url,
+            )
+            for seq, gubun in pairs:
+                add_url(f"{base_url}/front/supportManageReq/supportManageView.do?seq={seq}&gubun={gubun}")
+    except Exception:
+        pass
 
-    # 2) seed_urls. 목록 URL이 막히거나 JS 렌더링이면 이 값으로 보완한다.
-    for u in bcfg.get("seed_urls") or []:
-        add_url(u)
-
-    # 3) seq 스캔. 기본은 최근 범위만 짧게 스캔하도록 설정한다.
-    if bcfg.get("seq_scan_enabled", True):
-        for u in biohub_seq_urls(bcfg):
+    # 2) 목록 조회가 아무것도 못 찾았을 때만 seed_urls로 보완한다.
+    if not candidates:
+        for u in bcfg.get("seed_urls") or []:
             add_url(u)
 
     out: List[Dict[str, Any]] = []
     used_title_keys = set()
-    max_detail_pages = int(bcfg.get("max_detail_pages", max(180, max_items * 6)))
 
     for url in candidates[:max_detail_pages]:
         try:
@@ -1007,7 +1010,7 @@ def collect_biohub_direct(bcfg: Dict[str, Any], common: Dict[str, Any]) -> List[
             continue
 
     if not out:
-        raise RuntimeError("서울바이오허브 0건: list_url/seed_urls/seq_start·seq_end 확인 필요")
+        raise RuntimeError("서울바이오허브 0건: 목록 페이지(list_page) 또는 seed_urls 확인 필요")
     return out
 
 

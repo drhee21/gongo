@@ -68,14 +68,7 @@
     "biohub_direct": {
       "enabled": true,
       "name": "서울바이오허브(직접)",
-      "list_urls": [
-        "https://www.seoulbiohub.kr/front/supportManageReq/supportManageList.do?gubun=14",
-        "https://www.seoulbiohub.kr/front/supportManageReq/supportManageList.do?gubun=08",
-        "https://www.seoulbiohub.kr/front/search/totalSearch.do"
-      ],
-      "list_url": "https://www.seoulbiohub.kr/front/supportManageReq/supportManageList.do?gubun=14",
       "base_url": "https://www.seoulbiohub.kr",
-      "link_pattern": "supportManageView.do|seq=",
       "org": "서울바이오허브",
       "category": "바이오·헬스",
       "seed_urls": [
@@ -86,17 +79,6 @@
         "https://www.seoulbiohub.kr/front/supportManageReq/supportManageView.do?gubun=09&seq=736",
         "https://www.seoulbiohub.kr/front/supportManageReq/supportManageView.do?gubun=04&seq=714"
       ],
-      "seq_scan_enabled": true,
-      "gubun_list": [
-        "14",
-        "08",
-        "09",
-        "04",
-        "03",
-        "12"
-      ],
-      "seq_start": 700,
-      "seq_end": 830,
       "max_detail_pages": 500,
       "detail_delay_sec": 0.03
     }
