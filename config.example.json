@@ -48,23 +48,20 @@
     "nrf": {
       "enabled": true,
       "name": "한국연구재단",
-      "list_url": "https://www.nrf.re.kr/biz/notice/list?menu_no=362&biz_not_gubn=guide",
-      "base_url": "https://www.nrf.re.kr",
-      "link_pattern": "notice/view|bbs/view|view",
+      "list_url": "https://www.iris.go.kr/contents/retrieveBsnsAncmListView.do?sorgnId=10001",
+      "base_url": "https://www.iris.go.kr",
       "org": "한국연구재단",
       "category": "R&D",
-      "method": "nrf_text",
-      "_note": "NRF 전용 텍스트 파서 사용. 상세 URL 대신 목록 URL을 연결합니다."
+      "method": "iris",
+      "max_pages": 6
     },
     "kddf": {
       "enabled": true,
       "name": "국가신약개발사업단",
       "list_url": "https://kddf.org/ko/board/business_notice",
       "base_url": "https://kddf.org",
-      "link_pattern": "business_notice/view|bc_no=",
       "org": "국가신약개발사업단",
-      "category": "R&D",
-      "_note": "link_pattern은 실제 공고 상세글(business_notice/view, bc_no=)만 매칭해야 합니다. 'board' 같은 느슨한 값을 넣으면 게시판 카테고리 메뉴 링크(규정 및 양식, 뉴스/보도자료 등)까지 공고로 잘못 수집됩니다."
+      "category": "R&D"
     },
     "biohub_direct": {
       "enabled": true,
@@ -91,8 +88,7 @@
       "link_pattern": "board/view|linkId=",
       "org": "한국보건산업진흥원",
       "category": "바이오·헬스",
-      "dates_reliable": false,
-      "_note": "link_pattern은 실제 게시글(board/view, linkId=)만 매칭해야 합니다. 'board' 같은 느슨한 값을 넣으면 사이트 전체 메뉴 링크(보건산업통계, 친인척 채용현황 등)까지 공고로 잘못 수집됩니다. 목록 행에 작성일(게시일)만 있고 신청기간이 없어서 dates_reliable을 false로 둡니다 — true로 바꾸면 작성일이 신청 시작일로 잘못 표시됩니다."
+      "dates_reliable": false
     }
   }
 }

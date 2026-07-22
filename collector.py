@@ -725,6 +725,86 @@ def collect_board(source_id: str, bcfg: Dict[str, Any], common: Dict[str, Any]) 
     return out
 
 
+# ──────────────────────────── 국가신약개발사업단(KDDF) 전용 수집기 ────────────────────────────
+# collect_board의 link_pattern 기반 범용 파싱 대신, kddf 게시판이 실제 테이블 구조
+# (div.board_table > table > tbody > tr, 각 행에 td.subject/td.td_period/td.td_state)를
+# 갖고 있다는 걸 활용해 제목·기간·진행상태를 훨씬 정확하게 뽑는다.
+
+
+def collect_kddf(bcfg: Dict[str, Any], common: Dict[str, Any]) -> List[Dict[str, Any]]:
+    if not bcfg.get("enabled", False):
+        raise RuntimeError("비활성화됨")
+    list_url = clean(bcfg.get("list_url"))
+    if not list_url or list_url.startswith("TODO"):
+        raise RuntimeError("list_url 미설정")
+    if common.get("respect_robots", True) and not robots_allows(list_url):
+        raise PermissionError("robots.txt 차단")
+
+    r = SESSION.get(list_url, timeout=common.get("timeout_sec", 20))
+    r.raise_for_status()
+    if not r.encoding or r.encoding.lower() == "iso-8859-1":
+        r.encoding = r.apparent_encoding
+    soup = BeautifulSoup(r.text, "html.parser")
+
+    base_url = bcfg.get("base_url") or list_url
+    org_default = bcfg.get("org") or bcfg.get("name") or "국가신약개발사업단"
+    category = bcfg.get("category") or "R&D"
+    # 진행/완료 상태는 사이트 자체가 이미 판단해서 보여주는 값이라 참고용으로 쓸모
+    # 있지만, 지금은 다른 소스와 마찬가지로 status_of()가 end_date만으로 상태를
+    # 계산하므로 기본은 수집하지 않는다. config에서 include_state:true로 켜면
+    # raw 데이터에만 남긴다(화면 로직에는 아직 반영하지 않음).
+    include_state = bool(bcfg.get("include_state", False))
+    max_items = int(common.get("max_items_per_source", 60))
+
+    out: List[Dict[str, Any]] = []
+    seen = set()
+    for tr in soup.select("div.board_table table tbody tr"):
+        subj = tr.select_one("td.subject")
+        a = subj.select_one("a") if subj else None
+        if not a:
+            continue
+        href = a.get("href", "")
+        url = urljoin(base_url, href)
+        url = re.sub(r"(?<!:)/{2,}", "/", url)
+        if url in seen:
+            continue
+        seen.add(url)
+
+        span = a.select_one("span")
+        title_text = a.get_text(" ", strip=True)
+        org = org_default
+        if span:
+            span_text = clean(span.get_text())
+            org = span_text.strip("[]") or org_default
+            title_text = title_text.replace(span_text, "", 1)
+        title = clean(title_text)
+        if len(title) < 4:
+            continue
+
+        period_el = tr.select_one("td.td_period")
+        period_text = clean(period_el.get_text()) if period_el else ""
+        start = end = None
+        parts = re.split(r"[~∼]", period_text, maxsplit=1)
+        if len(parts) == 2:
+            start = parse_date(parts[0])
+            end = parse_date(parts[1])
+
+        raw: Dict[str, Any] = {"row_text": clean(tr.get_text(" ", strip=True))}
+        if include_state:
+            state_el = tr.select_one("td.td_state div.state_txt")
+            if state_el:
+                raw["state"] = clean(state_el.get_text())
+
+        item = normalize("kddf", title, org, category, start, end, url, raw=raw)
+        mark_dates_unknown_if_needed(item, period_text, start_was_known=bool(start))
+        out.append(item)
+        if len(out) >= max_items:
+            break
+
+    if not out:
+        raise RuntimeError("0건 파싱: kddf 게시판 구조 확인 필요")
+    time.sleep(float(common.get("request_delay_sec", 0.8)))
+    return out
 
 
 # ──────────────────────────── 한국연구재단(NRF) - IRIS 경유 수집 ────────────────────────────
@@ -1262,6 +1342,9 @@ def collect_all(write_db: bool = True) -> CollectRun:
             elif sid == "nrf":
                 items = collect_nrf_iris(board_cfg, common)[:cap]
                 run.record(sid, items, "정상", name=board_cfg.get("name") or "한국연구재단", method="IRIS 경유")
+            elif sid == "kddf":
+                items = collect_kddf(board_cfg, common)[:cap]
+                run.record(sid, items, "정상", name=board_cfg.get("name") or "국가신약개발사업단", method="전용 파서")
             else:
                 items = collect_board(sid, board_cfg, common)[:cap]
                 run.record(sid, items, "정상", name=board_cfg.get("name"), method="게시판")
