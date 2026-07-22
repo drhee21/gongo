@@ -10,11 +10,13 @@ from __future__ import annotations
 
 import difflib
 import hashlib
+import html
 import json
 import os
 import re
 import time
 import urllib.robotparser
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -634,23 +636,49 @@ def robots_allows(url: str) -> bool:
         return True
 
 
-TITLE_END_DATE_RE = re.compile(r"~\s*(\d{1,2})\s*[./]\s*(\d{1,2})")
+_TITLE_YEAR_SKIP = r"(?:['’]?\d{1,4}[.\s]+)?"
+# 날짜처럼 생긴 숫자가 사실은 금액/수량 표현("3.5억원까지", "1.2배까지")인 경우를
+# 걸러내기 위한 가드. 이런 문구도 "까지"로 끝나기 때문에 가드가 없으면 날짜로 오인한다.
+_TITLE_NOT_UNIT = r"(?!\s*(?:억|만\s*원|원|%|퍼센트|배|톤|킬로|kg|점|개|건|명|회|리터|시간|일간))"
+_TITLE_WEEKDAY = r"(?:\s*\([^)]{1,4}\))?"
+_TITLE_DATE = r"(\d{1,2})\s*[./월]\s*(\d{1,2})" + _TITLE_NOT_UNIT + r"\s*일?\.?"
+
+TITLE_DATE_RANGE_RE = re.compile(
+    _TITLE_YEAR_SKIP + _TITLE_DATE + _TITLE_WEEKDAY + r"\s*~\s*" + _TITLE_YEAR_SKIP + _TITLE_DATE + _TITLE_WEEKDAY
+)
+# 마감일 신호는 두 가지 중 하나로 잡는다: "~" 뒤에 오는 날짜, 또는 "까지"/"마감"
+# 앞에 오는 날짜. 후자의 경우 사이에 다른 날짜가 하나 더 끼어 있으면(범위 표기가
+# 아닌데 우연히 걸리는 경우를 막기 위해) 건너뛰지 않도록 막아둔다.
+_TITLE_TAIL = r"(?:(?!\d{1,2}\s*[./월]\s*\d{1,2}).){0,16}?(?:까지|마감)"
+TITLE_END_DATE_RE = re.compile(
+    r"(?:~\s*" + _TITLE_YEAR_SKIP + _TITLE_DATE + r")"
+    r"|(?:" + _TITLE_YEAR_SKIP + _TITLE_DATE + _TITLE_TAIL + r")"
+)
 
 
-def parse_title_end_date(title: str) -> Optional[str]:
-    """제목에 흔히 붙는 '(~7.20.(월))', '(~7/30(목) 16:00)' 같은 마감일 표기에서
-    월/일만 뽑아 마감일을 추정한다. 목록 행에 신청기간이 없는 게시판(예:
-    khidi_direct)에서 dates_reliable=false여도, 최소한 제목에 마감일이 박혀
-    있는 공고는 정확한 마감일을 보여줄 수 있다. 연도는 명시되지 않으므로
-    parse_period()의 기존 관행과 동일하게 현재 연도를 사용한다."""
+def parse_title_dates(title: str) -> Tuple[Optional[str], Optional[str]]:
+    """제목에 흔히 붙는 '(~7.20.(월))', '(6/3~6/21 17시까지)' 같은 표기에서
+    신청기간을 추정한다. 목록 행에 신청기간이 없는 게시판(예: khidi_direct)에서도
+    제목에 박힌 날짜만큼은 정확하게 보여줄 수 있다. 연도가 명시되지 않으므로 현재
+    연도를 기본으로 쓰되, 범위의 종료월이 시작월보다 앞서면(예: "12.19~2.5")
+    연도가 넘어간 것으로 보고 종료일에 1년을 더한다."""
+    m = TITLE_DATE_RANGE_RE.search(title)
+    if m:
+        s_mo, s_d, e_mo, e_d = int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4))
+        s_year = date.today().year
+        e_year = s_year + 1 if e_mo < s_mo else s_year
+        if valid_ymd(s_year, s_mo, s_d) and valid_ymd(e_year, e_mo, e_d):
+            return f"{s_year:04d}-{s_mo:02d}-{s_d:02d}", f"{e_year:04d}-{e_mo:02d}-{e_d:02d}"
+
     m = TITLE_END_DATE_RE.search(title)
-    if not m:
-        return None
-    mo, d = int(m.group(1)), int(m.group(2))
-    year = date.today().year
-    if not valid_ymd(year, mo, d):
-        return None
-    return f"{year:04d}-{mo:02d}-{d:02d}"
+    if m:
+        mo, d = (m.group(1), m.group(2)) if m.group(1) else (m.group(3), m.group(4))
+        mo, d = int(mo), int(d)
+        year = date.today().year
+        if valid_ymd(year, mo, d):
+            return None, f"{year:04d}-{mo:02d}-{d:02d}"
+
+    return None, None
 
 
 def collect_board(source_id: str, bcfg: Dict[str, Any], common: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -711,8 +739,9 @@ def collect_board(source_id: str, bcfg: Dict[str, Any], common: Dict[str, Any]) 
             # 있다("~7.20.(월)" 등). 이걸 뽑을 수 있으면 정확한 마감일을 쓰고,
             # 못 뽑으면 row_text/제목에 상시류 표현이 있는지 확인한 뒤 그마저
             # 없으면 날짜 미상으로 남긴다.
-            title_end = parse_title_end_date(title)
+            title_start, title_end = parse_title_dates(title)
             if title_end:
+                item["start"] = title_start
                 item["end"] = title_end
             else:
                 mark_dates_unknown_if_needed(item, row_text)
@@ -803,6 +832,71 @@ def collect_kddf(bcfg: Dict[str, Any], common: Dict[str, Any]) -> List[Dict[str,
 
     if not out:
         raise RuntimeError("0건 파싱: kddf 게시판 구조 확인 필요")
+    time.sleep(float(common.get("request_delay_sec", 0.8)))
+    return out
+
+
+# ──────────────────────────── 보건산업진흥원(KHIDI) - 공고 API 수집 ────────────────────────────
+# khidi.or.kr의 게시판 목록 화면에는 신청기간이 아예 노출되지 않아 예전에는 게시일만
+# 있는 게시판을 크롤링했다. 대신 KHIDI가 제공하는 공고 API를 쓰면 각 공고의 제목을
+# 가져올 수 있고, 그 제목에 박힌 마감일 표기(parse_title_dates)로 신청기간을 추정한다.
+KHIDI_FEED_URL = "https://www.khidi.or.kr/kps/openAPI/requestxml"
+
+
+def collect_khidi_direct(bcfg: Dict[str, Any], common: Dict[str, Any]) -> List[Dict[str, Any]]:
+    if not bcfg.get("enabled", False):
+        raise RuntimeError("비활성화됨")
+    if common.get("respect_robots", True) and not robots_allows(KHIDI_FEED_URL):
+        raise PermissionError("robots.txt 차단")
+
+    menu_id = bcfg.get("menu_id") or "MENU01108"
+    row_cnt = int(bcfg.get("row_cnt") or 200)
+    params = {"menuId": menu_id, "rowCnt": row_cnt}
+    r = SESSION.get(KHIDI_FEED_URL, params=params, timeout=common.get("timeout_sec", 20))
+    r.raise_for_status()
+    root = ET.fromstring(r.content)
+
+    base_url = bcfg.get("base_url") or "https://www.khidi.or.kr"
+    org_default = bcfg.get("org") or bcfg.get("name") or "한국보건산업진흥원"
+    category = bcfg.get("category") or "바이오·헬스"
+    max_items = int(common.get("max_items_per_source", 60))
+
+    out: List[Dict[str, Any]] = []
+    seen = set()
+    for row in root.findall("row"):
+        # 이 API는 XML 엔티티를 이중으로 인코딩해서 내려준다(원문의 "&amp;apos;"가
+        # XML 파싱을 거치면 "&apos;" 문자열로 남는다). html.unescape를 한 번 더
+        # 적용해야 실제 문자("'")로 바뀐다.
+        title = clean(html.unescape(row.findtext("title") or ""))
+        if len(title) < 4:
+            continue
+        url = clean(html.unescape(row.findtext("url") or ""))
+        if not url:
+            continue
+        url = urljoin(base_url, url)
+        if url in seen:
+            continue
+        seen.add(url)
+
+        start, end = parse_title_dates(title)
+        item = normalize(
+            "khidi_direct", title, org_default, category, start, end, url,
+            raw={"post_date": clean(row.findtext("date") or "")},
+        )
+        # normalize()는 start가 비어 있으면 오늘 날짜로 채우는데, 마감일만 뽑히고
+        # 시작일은 못 뽑은 경우(제목에 종료일만 있는 경우가 대부분) "오늘부터
+        # 접수중"으로 잘못 보이게 된다. mark_dates_unknown_if_needed는 end가 이미
+        # 있으면 그냥 반환해버려서 start를 손대지 않으므로, 여기서 먼저 명시적으로
+        # 비워준다.
+        if not start:
+            item["start"] = None
+        mark_dates_unknown_if_needed(item, title, start_was_known=bool(start))
+        out.append(item)
+        if len(out) >= max_items:
+            break
+
+    if not out:
+        raise RuntimeError("0건 파싱: khidi 공고 API 구조 확인 필요")
     time.sleep(float(common.get("request_delay_sec", 0.8)))
     return out
 
@@ -1345,6 +1439,9 @@ def collect_all(write_db: bool = True) -> CollectRun:
             elif sid == "kddf":
                 items = collect_kddf(board_cfg, common)[:cap]
                 run.record(sid, items, "정상", name=board_cfg.get("name") or "국가신약개발사업단", method="전용 파서")
+            elif sid == "khidi_direct":
+                items = collect_khidi_direct(board_cfg, common)[:cap]
+                run.record(sid, items, "정상", name=board_cfg.get("name") or "보건산업진흥원/KHIDI", method="전용 파서(API)")
             else:
                 items = collect_board(sid, board_cfg, common)[:cap]
                 run.record(sid, items, "정상", name=board_cfg.get("name"), method="게시판")

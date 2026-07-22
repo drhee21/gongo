@@ -83,12 +83,11 @@
     "khidi_direct": {
       "enabled": true,
       "name": "보건산업진흥원/KHIDI",
-      "list_url": "https://www.khidi.or.kr/board?menuId=MENU01108",
       "base_url": "https://www.khidi.or.kr",
-      "link_pattern": "board/view|linkId=",
+      "menu_id": "MENU01108",
+      "row_cnt": 200,
       "org": "한국보건산업진흥원",
-      "category": "바이오·헬스",
-      "dates_reliable": false
+      "category": "바이오·헬스"
     }
   }
 }
