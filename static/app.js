@@ -534,8 +534,13 @@ function openAuthModal(mode){
   $('#authModal').classList.remove('hidden');
 }
 function closeAuthModal(){
-  $('#authModal').classList.add('hidden');
-  $('#authForm').reset();
+  const modal = $('#authModal');
+  modal.classList.add('closing');
+  setTimeout(()=>{
+    modal.classList.add('hidden');
+    modal.classList.remove('closing');
+    $('#authForm').reset();
+  }, 160);
 }
 
 $('#btnOpenLogin')?.addEventListener('click', ()=>openAuthModal('login'));
