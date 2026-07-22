@@ -105,3 +105,13 @@ pre{white-space:pre-wrap;background:var(--panel2);border:1px solid var(--line);b
 .doc-name{font-weight:600;flex:1;word-break:break-all}
 .doc-meta{font-size:12px;color:var(--muted)}
 @media(max-width:900px){body{grid-template-columns:1fr}.sidebar{position:relative;height:auto}.filters,.kpis,.notice,.form-grid{grid-template-columns:1fr}.detail{grid-column:1}.topbar{align-items:flex-start;flex-direction:column}}
+
+.toast-stack{position:fixed;bottom:28px;right:28px;z-index:1000;display:flex;flex-direction:column;gap:12px;align-items:flex-end}
+.toast{display:flex;align-items:center;gap:14px;background:var(--panel);border:1px solid var(--line);border-left:5px solid var(--muted);border-radius:12px;padding:16px 20px;box-shadow:0 12px 32px rgba(16,24,40,.16);font-size:16px;color:var(--text);min-width:280px;max-width:440px;animation:toast-in .18s ease-out}
+.toast.success{border-left-color:var(--ok)}
+.toast.error{border-left-color:var(--danger)}
+.toast.leaving{animation:toast-out .18s ease-in forwards}
+.toast-msg{flex:1;word-break:break-word;line-height:1.5}
+.toast-close{background:transparent;border:0;color:var(--muted);cursor:pointer;font-size:18px;padding:2px;line-height:1}
+@keyframes toast-in{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+@keyframes toast-out{from{opacity:1;transform:translateY(0)}to{opacity:0;transform:translateY(8px)}}

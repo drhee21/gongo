@@ -2,6 +2,26 @@ const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => [...document.querySelectorAll(sel)];
 const esc = (v) => String(v ?? '').replace(/[&<>"']/g, s => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[s]));
 
+function toast(msg, type=''){
+  let stack = $('#toastStack');
+  if(!stack){
+    stack = document.createElement('div');
+    stack.id = 'toastStack';
+    stack.className = 'toast-stack';
+    document.body.appendChild(stack);
+  }
+  const el = document.createElement('div');
+  el.className = `toast${type ? ' '+type : ''}`;
+  el.innerHTML = `<span class="toast-msg">${esc(msg)}</span><button type="button" class="toast-close" aria-label="닫기">✕</button>`;
+  const remove = () => {
+    el.classList.add('leaving');
+    setTimeout(()=>el.remove(), 180);
+  };
+  el.querySelector('.toast-close').addEventListener('click', remove);
+  stack.appendChild(el);
+  setTimeout(remove, 4000);
+}
+
 let notices = [];
 let sources = [];
 let rawSources = [];
@@ -160,7 +180,7 @@ function bindNoticeEvents(root){
       const res = await api('/api/favorite/toggle', {method:'POST', body:JSON.stringify({notice_id:id})});
       notices = notices.map(a => a.id===id ? {...a, favorite:res.favorite} : a);
       renderList();
-    }catch(err){ alert(err.message); }
+    }catch(err){ toast(err.message, 'error'); }
   }));
   root.querySelectorAll('[data-ai-toggle]').forEach(badge=>badge.addEventListener('click', e=>{
     e.stopPropagation();
@@ -349,9 +369,9 @@ async function loadSourceOverrides(){
         const list_url = row.querySelector('.override-input').value.trim();
         try{
           await api('/api/admin/source-overrides', {method:'POST', body:JSON.stringify({source_id, list_url})});
-          alert(list_url ? '재정의 저장 완료' : '재정의 해제 완료');
+          toast(list_url ? '재정의 저장 완료' : '재정의 해제 완료', 'success');
           loadSourceOverrides();
-        }catch(err){ alert(err.message); }
+        }catch(err){ toast(err.message, 'error'); }
       });
     });
   }catch(err){ el.innerHTML = `<p class="meta">${esc(err.message)}</p>`; }
@@ -371,10 +391,10 @@ async function recollect(){
     const res = await api('/api/recollect', {method:'POST', body:'{}'});
     if(result) result.textContent = JSON.stringify(res, null, 2);
     await loadAll();
-    alert(`업데이트 완료: ${res.count}건`);
+    toast(`업데이트 완료: ${res.count}건`, 'success');
   }catch(err){
     if(result) result.textContent = err.stack || err.message;
-    alert(`업데이트 실패: ${err.message}`);
+    toast(`업데이트 실패: ${err.message}`, 'error');
   }
 }
 
@@ -417,7 +437,7 @@ $('#companyForm')?.addEventListener('submit', async e=>{
   const res = await api('/api/company', {method:'POST', body:JSON.stringify(data)});
   company = res.company || {};
   renderList();
-  alert('회사 정보 저장 완료');
+  toast('회사 정보 저장 완료', 'success');
 });
 $('#btnAiFit')?.addEventListener('click', async ()=>{
   const result = $('#aiFitResult');
@@ -428,7 +448,7 @@ $('#btnAiFit')?.addEventListener('click', async ()=>{
     await loadAll();
   }catch(err){
     if(result) result.textContent = err.stack || err.message;
-    alert(`AI 분석 실패: ${err.message}`);
+    toast(`AI 분석 실패: ${err.message}`, 'error');
   }
 });
 
@@ -441,8 +461,8 @@ $('#apiKeyForm')?.addEventListener('submit', async e=>{
     if(currentUserState) currentUserState.has_api_key = res.has_api_key;
     updateApiKeyStatus();
     form.reset();
-    alert(res.has_api_key ? 'API 키 저장 완료' : 'API 키 삭제 완료');
-  }catch(err){ alert(err.message); }
+    toast(res.has_api_key ? 'API 키 저장 완료' : 'API 키 삭제 완료', 'success');
+  }catch(err){ toast(err.message, 'error'); }
 });
 
 $('#bizinfoKeyForm')?.addEventListener('submit', async e=>{
@@ -455,8 +475,8 @@ $('#bizinfoKeyForm')?.addEventListener('submit', async e=>{
     updateApiKeyStatus();
     form.reset();
     await loadAll();
-    alert(res.has_bizinfo_key ? '기업마당 API 키 저장 완료' : '기업마당 API 키 삭제 완료');
-  }catch(err){ alert(err.message); }
+    toast(res.has_bizinfo_key ? '기업마당 API 키 저장 완료' : '기업마당 API 키 삭제 완료', 'success');
+  }catch(err){ toast(err.message, 'error'); }
 });
 
 async function loadCompanyDocs(){
@@ -480,7 +500,7 @@ async function loadCompanyDocs(){
         try{
           await api('/api/company/documents/delete', {method:'POST', body:JSON.stringify({doc_id})});
           loadCompanyDocs();
-        }catch(err){ alert(err.message); }
+        }catch(err){ toast(err.message, 'error'); }
       });
     });
   }catch(err){ el.innerHTML = `<p class="meta">${esc(err.message)}</p>`; }
@@ -490,7 +510,7 @@ $('#companyDocsForm')?.addEventListener('submit', async e=>{
   e.preventDefault();
   const form = e.currentTarget;
   const input = $('#companyDocsInput');
-  if(!input.files.length){ alert('업로드할 파일을 선택해주세요.'); return; }
+  if(!input.files.length){ toast('업로드할 파일을 선택해주세요.', 'error'); return; }
   const fd = new FormData();
   for(const f of input.files) fd.append('files', f);
   try{
@@ -498,9 +518,9 @@ $('#companyDocsForm')?.addEventListener('submit', async e=>{
     const data = await res.json();
     if(!res.ok || data.ok === false) throw new Error(data.error || `HTTP ${res.status}`);
     form.reset();
-    alert('문서 업로드 완료');
+    toast('문서 업로드 완료', 'success');
     loadCompanyDocs();
-  }catch(err){ alert(err.message); }
+  }catch(err){ toast(err.message, 'error'); }
 });
 
 let authMode = 'login';
@@ -534,7 +554,7 @@ $('#authForm')?.addEventListener('submit', async e=>{
     currentUserState = res.user;
     closeAuthModal();
     await loadAll();
-  }catch(err){ alert(err.message); }
+  }catch(err){ toast(err.message, 'error'); }
 });
 $('#btnLogout')?.addEventListener('click', async ()=>{
   try{ await api('/api/auth/logout', {method:'POST', body:'{}'}); }catch(err){ /* ignore */ }
