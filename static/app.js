@@ -118,7 +118,7 @@ function noticeHTML(a){
     <div class="src-group">${srcBadges}</div>
     <div>
       <h3>${esc(a.title)}</h3>
-      <div class="meta">${esc(a.org)} · ${esc(a.category)} · ${a.dates_unknown ? '날짜 미상' : `${esc(a.start || '-')} ~ ${a.end ? esc(a.end) : (a.status === '상시' ? '상시' : '-')}`}</div>
+      <div class="meta">${esc(a.org)} · ${esc(a.category)} · ${a.dates_unknown ? '날짜 미상' : `${a.start ? esc(a.start) + ' ' : ''}~ ${a.end ? esc(a.end) : (a.status === '상시' ? '상시' : '-')}`}</div>
       <div class="badges">
         <span class="badge ${statusClass(a.status)}">${esc(a.status)}</span>
         ${ddayText(a) !== a.status ? `<span class="badge ${a.dday != null && a.dday <= 7 && a.dday >= 0 ? 'urgent' : ''}">${esc(ddayText(a))}</span>` : ''}
@@ -540,7 +540,7 @@ function closeAuthModal(){
     modal.classList.add('hidden');
     modal.classList.remove('closing');
     $('#authForm').reset();
-  }, 160);
+  }, 70);
 }
 
 $('#btnOpenLogin')?.addEventListener('click', ()=>openAuthModal('login'));
