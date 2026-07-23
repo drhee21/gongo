@@ -415,6 +415,7 @@ function fillCompany(){
   if(!f) return;
   ['name','years','region','sector','keywords'].forEach(k=>{ if(f.elements[k]) f.elements[k].value = company[k] ?? ''; });
   ['venture','rnd_center'].forEach(k=>{ if(f.elements[k]) f.elements[k].checked = !!company[k]; });
+  if(f.elements.keyword_mode_and) f.elements.keyword_mode_and.checked = company.keyword_mode === 'and';
 }
 
 $$('.nav').forEach(btn=>btn.addEventListener('click',()=>{
@@ -446,6 +447,8 @@ $('#companyForm')?.addEventListener('submit', async e=>{
   data.years = data.years === '' ? '' : Number(data.years);
   data.venture = form.elements.venture.checked;
   data.rnd_center = form.elements.rnd_center.checked;
+  data.keyword_mode = form.elements.keyword_mode_and.checked ? 'and' : 'or';
+  delete data.keyword_mode_and;
   const res = await api('/api/company', {method:'POST', body:JSON.stringify(data)});
   company = res.company || {};
   renderList();

@@ -120,7 +120,10 @@
           <label>업력(년)<input name="years" type="number" min="0" step="0.5" placeholder="예: 3" /></label>
           <label>지역<input name="region" placeholder="예: 서울" /></label>
           <label>분야<input name="sector" placeholder="예: 바이오·헬스" /></label>
-          <label class="wide">키워드<input name="keywords" placeholder="예: 신약, 의료기기, 글로벌, R&D" /></label>
+          <label class="wide">키워드<input name="keywords" placeholder="예: 신약, 의료기기, 글로벌, R&D" />
+            <span class="meta">AI가 이 키워드를 참고해 공고 적합도를 판단합니다. 구체적이고 명확하게 적을수록 정확도가 높아집니다.</span>
+          </label>
+          <label class="checkbox wide"><input type="checkbox" name="keyword_mode_and" /> 키워드 모두 일치해야 적합 (AND) — 기본은 하나 이상 일치 시 적합(OR)</label>
           <label class="checkbox"><input type="checkbox" name="venture" /> 벤처기업 인증 보유</label>
           <label class="checkbox"><input type="checkbox" name="rnd_center" /> 기업부설연구소 보유</label>
           <button class="primary wide" type="submit">저장</button>

@@ -35,7 +35,11 @@ SYSTEM_PROMPT = (
     "fit(적합) / unfit(부적합, 요건상 명백히 지원 불가) / unsure(정보 부족 또는 애매함) 중 하나로 분류하고,\n"
     "판단 근거를 한국어로 한 문장 이내로 짧게 설명해라. 전달받은 공고 전부에 대해 반드시 결과를 반환해라.\n"
     "공고에 '벤처기업' 또는 '기업부설연구소' 보유가 지원 자격 요건이나 가점 사항으로 언급되어 있으면,\n"
-    "회사 프로필의 벤처기업 인증/기업부설연구소 보유 여부와 대조해서 판단에 반영해라."
+    "회사 프로필의 벤처기업 인증/기업부설연구소 보유 여부와 대조해서 판단에 반영해라.\n"
+    "회사 키워드·분야와 공고 내용이 같은 범주에 속하면(예: '의료기기' 키워드에 백신·진단키트도 포함)\n"
+    "세부 품목이 정확히 일치하지 않아도 적합으로 판단해라.\n"
+    "같은 범주인지 애매하더라도 최선의 판단으로 fit 또는 unfit 중 하나를 선택해라.\n"
+    "unsure는 공고에 필요한 정보 자체가 없을 때만 사용해라."
 )
 
 
@@ -50,7 +54,10 @@ def _company_text(company: Dict[str, Any]) -> str:
     if company.get("sector"):
         parts.append(f"주요 분야: {company['sector']}")
     if company.get("keywords"):
-        parts.append(f"키워드: {company['keywords']}")
+        if company.get("keyword_mode") == "and":
+            parts.append(f"키워드(모두 관련되어야 적합으로 판단): {company['keywords']}")
+        else:
+            parts.append(f"키워드(하나 이상 관련되면 적합으로 판단): {company['keywords']}")
     parts.append(f"벤처기업 인증: {'보유' if company.get('venture') else '미보유'}")
     parts.append(f"기업부설연구소: {'보유' if company.get('rnd_center') else '미보유'}")
     return "\n".join(parts) or "회사 정보 없음 (일반적인 기준으로 판단)"
