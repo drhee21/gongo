@@ -396,189 +396,98 @@ def collect_g2b(cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
 
 
 KSTARTUP_DEFAULT_URL = "https://www.k-startup.go.kr/web/contents/bizpbanc-ongoing.do"
-KSTARTUP_CATEGORIES = [
-    "사업화",
-    "기술개발(R&D)",
-    "시설ㆍ공간ㆍ보육",
-    "멘토링ㆍ컨설팅ㆍ교육",
-    "글로벌",
-    "인력",
-    "융자ㆍ보증",
-    "융자",
-    "행사ㆍ네트워크",
-    "창업교육",
-    "판로ㆍ해외진출",
-    "정책자금",
-]
-KSTARTUP_CATEGORY_RE = re.compile(
-    r"^(사업화|기술개발\(R&D\)|시설ㆍ공간ㆍ보육|멘토링ㆍ컨설팅ㆍ교육|글로벌|인력|융자ㆍ보증|융자|행사ㆍ네트워크|창업교육|판로ㆍ해외진출|정책자금)\s*(?:D-?\d+|D-DAY|오늘마감|상시|마감)?$"
-)
-KSTARTUP_BAD_TITLE_WORDS = [
-    "새로운게시글", "스크랩", "조회", "등록일자", "시작일자", "마감일자", "정렬 유형", "검색어 입력",
-    "공공", "민간", "지자체", "중앙부처", "처음페이지", "다음페이지", "마지막페이지", "이전페이지",
-]
+# 카테고리 배지는 클래스가 "flag typeNN"(NN=두 자리 숫자) 형태이고, 같은 부모 안에
+# D-day 배지도 "flag day"로 같은 flag 클래스를 공유한다. day와 구분하려고 day가
+# 아닌 것을 걸러내는 대신, "typeNN 모양인가"를 직접 확인한다 — 나중에 flag 클래스가
+# 하나 더 늘어나도(day 외의 새 배지) 엉뚱한 걸 카테고리로 오인하지 않는다.
+KSTARTUP_TYPE_CLASS_RE = re.compile(r"^type\d{2}$")
+KSTARTUP_GO_VIEW_RE = re.compile(r"go_view\(\s*(\d+)\s*\)")
+KSTARTUP_LAST_PAGE_RE = re.compile(r"fn_egov_link_page\(\s*(\d+)\s*\)")
 
 
-def discover_kstartup_detail_urls(html: str, base_url: str) -> List[str]:
-    """HTML 안에 남아 있는 K-Startup 상세 링크를 최대한 추출한다.
-
-    K-Startup 목록은 JS/form 방식으로 렌더링되는 부분이 있어 href가 없을 때도 있다.
-    링크가 잡히지 않으면 목록 URL을 item url로 사용한다.
-    """
-    soup = BeautifulSoup(html, "html.parser")
-    seen = set()
-    urls: List[str] = []
-
-    def add(u: str) -> None:
-        u = clean(u).replace("&amp;", "&")
-        if not u:
-            return
-        if "pbancSn=" in u and "bizpbanc" not in u:
-            u = "/web/contents/bizpbanc-ongoing.do?schM=view&" + u.lstrip("?&")
-        u = urljoin(base_url, u)
-        if "pbancSn=" not in u and "schM=view" not in u:
-            return
-        if u not in seen:
-            seen.add(u)
-            urls.append(u)
-
-    for a in soup.find_all("a", href=True):
-        href = a.get("href", "")
-        if "pbancSn=" in href or "schM=view" in href or "bizpbanc" in href:
-            add(href)
-    # script 안의 문자열/onclick 보완
-    for m in re.finditer(r"(?:/web/contents/)?bizpbanc-[^\"'<>\s]+?\.do\?[^\"'<>\s]*?(?:schM=view|pbancSn=\d+)[^\"'<>\s]*", html):
-        add(m.group(0))
-    for m in re.finditer(r"pbancSn=\d+", html):
-        add(m.group(0))
-    return urls
-
-
-def extract_kstartup_org(prefix: str, title: str) -> str:
-    """'제목/사업명 기관명 등록일자 ...' 형태에서 기관명을 보수적으로 추출."""
-    p = clean(prefix)
-    t = clean(title)
-    if t and p.startswith(t):
-        p = clean(p[len(t):])
-    # 제목과 다른 사업명이 앞에 붙는 경우가 많아, 기관명 접미사 위주로 마지막 덩어리를 잡는다.
-    suffixes = "창조경제혁신센터|경제진흥원|산업진흥원|디지털혁신진흥원|기술진흥원|기술원|진흥원|재단|공단|협회|센터|대학교|대학|연구원|연구소|공사|파트너스|컴퍼니|시장|대표이사|장관"
-    no_paren = re.sub(r"\([^)]*\)", " ", p)
-    # 우선 공백 없는 마지막 기관명 후보를 잡는다. 예: '... 서울경제진흥원' -> '서울경제진흥원'
-    m_short = re.search(r"((?:\(재\)|\(주\)|재단법인|사단법인)?[가-힣A-Za-z0-9·&]{2,35}(?:" + suffixes + r"))$", clean(no_paren))
-    if m_short:
-        return clean(m_short.group(1))
-    org_pat = re.compile(
-        r"((?:\(재\)|\(주\)|재단법인|사단법인)?[가-힣A-Za-z0-9·&()\s]{1,45}"
-        r"(?:" + suffixes + r"))$"
-    )
-    m = org_pat.search(p)
-    if m:
-        return clean(m.group(1))
-    # fallback: 마지막 1~4 토큰을 기관명으로 추정
-    toks = [x for x in p.split() if x]
-    if toks:
-        tail = " ".join(toks[-3:])
-        if len(tail) <= 50:
-            return tail
-    return "K-Startup"
+def detect_kstartup_last_page(html: str) -> int:
+    """페이지네이션 링크(fn_egov_link_page(N))에 나오는 값 중 가장 큰 수가 마지막
+    페이지 번호다. "마지막페이지" 버튼도 같은 함수를 호출하므로 별도 텍스트 매칭
+    없이 이 값들의 최댓값만 구하면 된다."""
+    nums = [int(n) for n in KSTARTUP_LAST_PAGE_RE.findall(html)]
+    return max(nums) if nums else 1
 
 
 def parse_kstartup_html_items(html: str, page_url: str, max_items: int = 80) -> List[Dict[str, Any]]:
     soup = BeautifulSoup(html, "html.parser")
-    for tag in soup(["script", "style", "noscript"]):
-        tag.decompose()
-    raw_text = soup.get_text("\n", strip=True)
-    lines = [clean(x) for x in raw_text.splitlines() if clean(x)]
-    detail_urls = discover_kstartup_detail_urls(html, page_url)
-
-    # 실제 목록은 '정렬 유형 선택' 이후에 카드형으로 반복된다. 없으면 모집중 이후부터 탐색.
-    start_i = 0
-    for marker in ["정렬 유형 선택", "다양한 조건을 설정하여", "검색어 입력"]:
-        idx = next((i for i, line in enumerate(lines) if marker in line), None)
-        if idx is not None:
-            start_i = idx
-            break
-    scan_lines = lines[start_i:]
-
-    cat_positions = []
-    for i, line in enumerate(scan_lines):
-        if KSTARTUP_CATEGORY_RE.match(line):
-            cat_positions.append(i)
+    container = soup.select_one("#bizPbancList")
+    if not container:
+        return []
 
     out: List[Dict[str, Any]] = []
-    for pos_idx, pos in enumerate(cat_positions):
-        nxt = cat_positions[pos_idx + 1] if pos_idx + 1 < len(cat_positions) else min(len(scan_lines), pos + 18)
-        block = scan_lines[pos:nxt]
-        joined = clean(" ".join(block))
-        if "마감일자" not in joined:
+    for li in container.select("li"):
+        inner = li.select_one("div.inner")
+        if not inner:
             continue
 
-        category_match = KSTARTUP_CATEGORY_RE.match(block[0])
-        category = category_match.group(1) if category_match else "창업지원"
-        reg = None
-        start = None
-        end = None
-        m_reg = re.search(r"등록일자\s*(20\d{2}-\d{2}-\d{2})", joined)
-        m_start = re.search(r"시작일자\s*(20\d{2}-\d{2}-\d{2})", joined)
-        m_end = re.search(r"마감일자\s*(20\d{2}-\d{2}-\d{2})", joined)
-        if m_reg:
-            reg = m_reg.group(1)
-        if m_start:
-            start = m_start.group(1)
-        if m_end:
-            end = m_end.group(1)
-
-        title_candidates = []
-        for line in block[1:8]:
-            if not line or len(line) < 6:
-                continue
-            if any(w in line for w in KSTARTUP_BAD_TITLE_WORDS):
-                continue
-            if KSTARTUP_CATEGORY_RE.match(line):
-                continue
-            title_candidates.append(line)
-        if not title_candidates:
+        tit_el = inner.select_one("div.right > div.middle > a > div.tit_wrap > p.tit")
+        title = clean(tit_el.get_text()) if tit_el else ""
+        if len(title) < 4:
             continue
-        title = title_candidates[0]
 
-        # 상세 정보 줄: '... 기관명 등록일자 YYYY-MM-DD 시작일자 ...' 형태
-        # joined 전체를 쓰면 제목/새로운게시글이 앞에 섞여 기관명 추정이 흔들리므로
-        # 등록일자가 들어 있는 실제 카드 설명 줄만 우선 사용한다.
-        org = "K-Startup"
-        detail_line = next((line for line in block if "등록일자" in line), "")
-        m_prefix = re.search(r"(.+?)\s+등록일자\s*20\d{2}-\d{2}-\d{2}", detail_line or joined)
-        if m_prefix:
-            prefix = m_prefix.group(1).replace("새로운게시글", " ")
-            org = extract_kstartup_org(prefix, title)
-        else:
-            # 상단 추천 영역은 별도 줄에 기관명이 나오는 경우가 있다.
-            for line in block:
-                if any(suf in line for suf in ["진흥원", "센터", "재단", "공단", "협회", "대학교", "연구원", "기술원"]):
-                    if len(line) <= 60 and not any(w in line for w in ["조회", "마감일자", "시작일자", "등록일자"]):
-                        org = line
-                        break
+        # 목록 링크가 <a href>가 아니라 "javascript:go_view(178627)" 형태라서, 그
+        # 안의 글 번호(pbancSn)를 뽑아 상세 페이지 URL을 직접 만든다.
+        a = inner.select_one("div.right > div.middle > a")
+        href = a.get("href", "") if a else ""
+        m_id = KSTARTUP_GO_VIEW_RE.search(href)
+        url = urljoin(page_url, f"?schM=view&pbancSn={m_id.group(1)}") if m_id else page_url
 
-        url = detail_urls[len(out)] if len(detail_urls) > len(out) else page_url
-        raw = {"collector": "kstartup_html", "row_text": joined[:1200]}
-        elig = elig_from_text(title, category, joined)
+        # 카테고리 배지는 "flag typeNN" 형태다. 같은 자리에 D-day 배지("flag day")도
+        # 있어서 그냥 첫 span.flag를 집으면 틀릴 수 있으므로 typeNN 모양인 것만 취한다.
+        category = "창업지원"
+        top = inner.select_one("div.right > div.top")
+        if top:
+            for span in top.select("span.flag"):
+                if any(KSTARTUP_TYPE_CLASS_RE.match(c) for c in (span.get("class") or [])):
+                    category = clean(span.get_text()) or category
+                    break
+
+        # 기관명/등록일자/시작일자/마감일자/조회수가 전부 같은 모양의 span.list로
+        # 나열되어 있다. 순서가 아니라 라벨 문자열로 구분한다 — 위치는 사이트가
+        # 배지를 하나 더 넣거나 순서를 바꾸면 바로 깨지지만, 라벨은 그대로다.
+        # 맨 첫 번째 span.list는 제목과 중복된 텍스트라 org 후보에서 제외한다.
+        spans = inner.select("div.right > div.bottom > span.list")
+        org = ""
+        start = end = None
+        for i, s in enumerate(spans):
+            text = clean(s.get_text(" "))
+            if i == 0:
+                continue
+            if text.startswith("등록일자") or text.startswith("조회"):
+                continue
+            if text.startswith("시작일자"):
+                m = re.search(r"(20\d{2}-\d{2}-\d{2})", text)
+                if m:
+                    start = m.group(1)
+                continue
+            if text.startswith("마감일자"):
+                m = re.search(r"(20\d{2}-\d{2}-\d{2})", text)
+                if m:
+                    end = m.group(1)
+                continue
+            if not org:
+                org = text
+        org = org or "K-Startup"
+
+        row_text = clean(inner.get_text(" ", strip=True))[:1200]
+        elig = elig_from_text(title, category, row_text)
         item = normalize(
-            "kstartup",
-            title,
-            org,
-            category,
-            start or reg,
-            end,
-            url,
-            budget="공고 참조",
-            elig=elig,
-            raw=raw,
+            "kstartup", title, org, category, start, end, url,
+            budget="공고 참조", elig=elig, raw={"row_text": row_text},
         )
-        # 마감일자 라벨이 없거나 값 형식이 안 맞아 못 뽑았을 때, 예전엔 이 카드를
-        # 통째로 버렸다. 페이지 구조가 바뀌었는지(전체 실패) 여부는 이 함수가 결과를
-        # 0건 반환했을 때 collect_kstartup()이 이미 예외로 잡아내므로, 개별 카드
-        # 하나가 날짜를 못 찾았다고 그 카드까지 버릴 필요는 없다 — 상시류 표현이
-        # 있으면 상시로, 없으면 날짜 미상으로 남기고 카드 자체는 보여준다.
-        mark_dates_unknown_if_needed(item, joined, start_was_known=bool(start or reg))
+        if not start:
+            item["start"] = None
+        # 마감일자가 없거나 형식이 안 맞아 못 뽑았을 때, 카드 전체를 버리지 않는다.
+        # 페이지 구조가 통째로 바뀌었는지(전체 실패)는 이 함수가 0건을 반환했을 때
+        # collect_kstartup()이 이미 예외로 잡아내므로, 카드 하나가 날짜를 못 찾았다고
+        # 그 카드까지 버릴 필요는 없다 — 상시류 표현이 있으면 상시로, 없으면
+        # 날짜 미상으로 남기고 카드 자체는 보여준다.
+        mark_dates_unknown_if_needed(item, row_text, start_was_known=bool(start))
         out.append(item)
         if len(out) >= max_items:
             break
@@ -590,34 +499,47 @@ def collect_kstartup(cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
 
     API 키를 사용하지 않는다. 기본 URL은
     https://www.k-startup.go.kr/web/contents/bizpbanc-ongoing.do 이다.
+
+    이 페이지는 한 번에 15건씩만 보여주고 페이지 크기를 늘릴 수 없어서(API가
+    아니라 서버 렌더링 HTML), 더 가져오려면 여러 페이지(?page=N)를 순회해야
+    한다. max_pages로 몇 페이지까지 순회할지, max_items로 최종 건수를 각각
+    제한한다. 사이트가 알려주는 마지막 페이지 번호를 넘어서까지 순회하지
+    않도록 첫 페이지에서 그 값을 읽어 max_pages를 필요하면 줄인다.
     """
     if not cfg.get("enabled", False):
         raise RuntimeError("비활성화됨")
-    list_urls = cfg.get("list_urls") or cfg.get("page_urls") or [cfg.get("list_url") or KSTARTUP_DEFAULT_URL]
+    base_url = clean(cfg.get("list_url") or KSTARTUP_DEFAULT_URL)
+    if not base_url or base_url.startswith("TODO"):
+        raise RuntimeError("list_url 미설정")
+    if cfg.get("respect_robots", True) and not robots_allows(base_url):
+        raise PermissionError("robots.txt 차단")
+
     timeout = cfg.get("timeout_sec", 20)
     max_items = int(cfg.get("max_items", cfg.get("max_items_per_source", 80)))
+    max_pages = int(cfg.get("max_pages", 5))
+
     out: List[Dict[str, Any]] = []
     last_error: Optional[Exception] = None
-
-    for url in list_urls:
-        url = clean(url)
-        if not url or url.startswith("TODO"):
-            continue
+    last_page: Optional[int] = None
+    page = 1
+    while page <= max_pages and len(out) < max_items:
+        url = base_url if page == 1 else f"{base_url}?page={page}"
         try:
-            if cfg.get("respect_robots", True) and not robots_allows(url):
-                raise PermissionError("robots.txt 차단")
             r = SESSION.get(url, timeout=timeout)
             r.raise_for_status()
             if not r.encoding or r.encoding.lower() == "iso-8859-1":
                 r.encoding = r.apparent_encoding
-            items = parse_kstartup_html_items(r.text, url, max_items=max_items)
+            if last_page is None:
+                last_page = detect_kstartup_last_page(r.text)
+                max_pages = min(max_pages, last_page)
+            items = parse_kstartup_html_items(r.text, url, max_items=max_items - len(out))
             out.extend(items)
-            if len(out) >= max_items:
-                break
-            time.sleep(float(cfg.get("request_delay_sec", 0.3)))
+            page += 1
+            if page <= max_pages and len(out) < max_items:
+                time.sleep(float(cfg.get("request_delay_sec", 0.3)))
         except Exception as e:
             last_error = e
-            continue
+            break
 
     out = deduplicate(out)
     if not out:
