@@ -602,10 +602,27 @@ def favorite_ids(user_id: str) -> List[str]:
 
 
 def save_ai_fit(user_id: str, results: Dict[str, Dict[str, str]], profile_hash: str) -> None:
+    """AI 판정 결과를 저장한다.
+
+    AI 분석은 공고 목록을 읽어온 뒤 여러 분에 걸쳐 진행되므로, 그 사이에
+    재수집이 일어나 일부 공고가 삭제될 수 있다(더 이상 존재하지 않는
+    notice_id는 FOREIGN KEY 제약을 위반한다). 이미 삭제된 공고에 대한
+    판정은 어차피 화면에 보여줄 대상이 없으므로 조용히 건너뛰고, 나머지
+    결과는 정상 저장한다 — 하나가 실패했다고 전체 저장이 롤백되지 않게 한다.
+    """
     init_db()
     ts = now_iso()
     with connect() as con:
+        existing_ids = {
+            row["id"]
+            for row in con.execute(
+                f"SELECT id FROM notices WHERE id IN ({','.join('?' * len(results))})",
+                list(results.keys()),
+            ).fetchall()
+        } if results else set()
         for nid, r in results.items():
+            if nid not in existing_ids:
+                continue
             con.execute(
                 """
                 INSERT INTO ai_fit(user_id, notice_id, fit, reason, profile_hash, updated_at)
