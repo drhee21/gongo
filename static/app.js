@@ -99,12 +99,10 @@ function aiFitBadge(a){
   return `<span class="badge ai ${cls}${trig}"${hasReason?` data-ai-toggle="${esc(a.id)}"`:''}>${esc(label)}${caret}</span>`;
 }
 
-// 판정 근거를 배지 옆 접이식 줄로 보여준다. unsure(확인 필요)는 사용자가 실제로
-// 손봐야 하는 항목이므로 기본 펼침, fit/unfit은 배지 클릭 시 펼친다.
+// 판정 근거를 배지 옆 접이식 줄로 보여준다. 기본은 접힌 상태이고, 배지를 클릭하면 펼쳐진다.
 function aiReasonRow(a){
   if(!a.ai_fit || !a.ai_reason) return '';
-  const open = a.ai_fit === 'unsure' ? ' show' : '';
-  return `<div class="ai-reason ${a.ai_fit}${open}" data-ai-reason="${esc(a.id)}">
+  return `<div class="ai-reason ${a.ai_fit}" data-ai-reason="${esc(a.id)}">
     <span class="ai-reason-tag">AI 판정 근거</span>
     <span class="ai-reason-text">${esc(a.ai_reason)}</span>
   </div>`;
@@ -185,7 +183,10 @@ function bindNoticeEvents(root){
   root.querySelectorAll('[data-ai-toggle]').forEach(badge=>badge.addEventListener('click', e=>{
     e.stopPropagation();
     const row = root.querySelector(`[data-ai-reason="${CSS.escape(badge.dataset.aiToggle)}"]`);
-    if(row) row.classList.toggle('show');
+    if(!row) return;
+    const open = row.classList.toggle('show');
+    badge.classList.toggle('ai-expanded', open);
+    badge.setAttribute('aria-expanded', String(open));
   }));
   root.querySelectorAll('[data-detail-toggle]').forEach(btn=>btn.addEventListener('click', e=>{
     e.stopPropagation();
@@ -451,15 +452,27 @@ $('#companyForm')?.addEventListener('submit', async e=>{
   toast('회사 정보 저장 완료', 'success');
 });
 $('#btnAiFit')?.addEventListener('click', async ()=>{
+  const btn = $('#btnAiFit');
   const result = $('#aiFitResult');
+  if(btn){
+    btn.disabled = true;
+    btn.dataset.originalText = btn.textContent;
+    btn.textContent = 'AI 분석 중...';
+  }
   if(result) result.textContent = 'AI 분석 중... (공고 건수에 따라 수 분 걸릴 수 있습니다)';
   try{
     const res = await api('/api/ai-fit', {method:'POST', body:'{}'});
     if(result) result.textContent = `분석 완료: 총 ${res.count}건\n${JSON.stringify(res.counts, null, 2)}`;
     await loadAll();
+    toast(`AI 분석 완료: 총 ${res.count}건`, 'success');
   }catch(err){
     if(result) result.textContent = err.stack || err.message;
     toast(`AI 분석 실패: ${err.message}`, 'error');
+  }finally{
+    if(btn){
+      btn.disabled = false;
+      btn.textContent = btn.dataset.originalText || 'AI로 맞춤 공고 분석 실행';
+    }
   }
 });
 
