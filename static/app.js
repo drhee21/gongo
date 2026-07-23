@@ -386,6 +386,12 @@ function updateApiKeyStatus(){
 
 async function recollect(){
   const result = $('#collectResult');
+  const btns = $$('#btnCollect, #btnCollectAdmin');
+  btns.forEach(b=>{
+    b.disabled = true;
+    b.dataset.originalText = b.textContent;
+    b.textContent = '업데이트 중...';
+  });
   if(result) result.textContent = '업데이트 중...';
   try{
     const res = await api('/api/recollect', {method:'POST', body:'{}'});
@@ -395,6 +401,11 @@ async function recollect(){
   }catch(err){
     if(result) result.textContent = err.stack || err.message;
     toast(`업데이트 실패: ${err.message}`, 'error');
+  }finally{
+    btns.forEach(b=>{
+      b.disabled = false;
+      b.textContent = b.dataset.originalText || '업데이트';
+    });
   }
 }
 

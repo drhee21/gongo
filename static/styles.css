@@ -22,6 +22,7 @@ p{color:var(--muted);margin:6px 0 0}
 .actions{display:flex;gap:10px;flex-wrap:wrap}
 .button,button.primary{border:1px solid var(--line);background:var(--panel2);color:var(--text);text-decoration:none;padding:10px 14px;border-radius:10px;cursor:pointer;font-size:14px}
 button.primary,.primary{background:var(--brand)!important;border-color:var(--brand)!important;color:#ffffff!important;font-weight:700}
+button:disabled{opacity:.55;cursor:not-allowed}
 .kpis{display:grid;grid-template-columns:repeat(4,minmax(120px,1fr));gap:12px;margin-bottom:16px}
 .kpi{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px;box-shadow:var(--shadow)}
 .kpi span{color:var(--muted);font-size:12px}
