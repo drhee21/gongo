@@ -112,7 +112,7 @@ def company_profile_hash(company: Dict[str, Any]) -> str:
 
 
 def attach_ai_fit(items, user_id: Optional[str], company: Dict[str, Any]):
-    if not user_id or not company:
+    if not user_id:
         for a in items:
             a["ai_fit"] = None
             a["ai_reason"] = None
