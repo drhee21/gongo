@@ -567,6 +567,20 @@ $('#btnLogout')?.addEventListener('click', async ()=>{
   await loadAll();
 });
 
+const EYE_ICON = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7Z"/><circle cx="12" cy="12" r="3"/></svg>';
+const EYE_OFF_ICON = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.9 4.24A10.94 10.94 0 0 1 12 4c7 0 11 7 11 7a18.5 18.5 0 0 1-3.22 4.19M6.61 6.61C3.9 8.36 2 11 2 11s4 7 11 7a10.6 10.6 0 0 0 5.39-1.61"/><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>';
+
+$$('[data-eye-toggle]').forEach(btn=>{
+  btn.innerHTML = EYE_ICON;
+  btn.addEventListener('click', ()=>{
+    const input = $('#'+btn.dataset.eyeToggle);
+    if(!input) return;
+    const hidden = input.type === 'password';
+    input.type = hidden ? 'text' : 'password';
+    btn.innerHTML = hidden ? EYE_OFF_ICON : EYE_ICON;
+  });
+});
+
 loadAll().catch(err=>{
   document.body.innerHTML = `<main style="padding:30px"><h1>서버 연결 실패</h1><pre>${esc(err.stack || err.message)}</pre><p>PowerShell에서 <code>python server.py</code> 또는 <code>start-server-v3.ps1</code>로 실행했는지 확인하세요.</p></main>`;
 });

@@ -129,7 +129,12 @@
           <h2>Claude API 키</h2>
           <p>AI 맞춤 분석은 본인의 Claude API 키로 실행됩니다. 키는 암호화되어 저장되고 화면에는 다시 표시되지 않습니다.</p>
           <form id="apiKeyForm" class="form-grid">
-            <label class="wide">API 키<input type="password" name="api_key" id="apiKeyInput" placeholder="sk-ant-..." /></label>
+            <label class="wide">API 키
+              <div class="input-eye-wrap">
+                <input type="password" name="api_key" id="apiKeyInput" placeholder="sk-ant-..." />
+                <button type="button" class="eye-toggle" data-eye-toggle="apiKeyInput" aria-label="API 키 표시/숨기기"></button>
+              </div>
+            </label>
             <button class="primary wide" type="submit">저장</button>
           </form>
           <p class="meta" id="apiKeyStatus"></p>
@@ -138,7 +143,12 @@
           <h2>기업마당 API 키</h2>
           <p>기업마당(bizinfo) 공고는 본인의 기업마당 API 키를 등록해야 볼 수 있습니다. 키는 <a href="https://www.bizinfo.go.kr" target="_blank" rel="noopener">기업마당</a>에서 무료로 발급받을 수 있습니다.</p>
           <form id="bizinfoKeyForm" class="form-grid">
-            <label class="wide">API 키<input type="password" name="bizinfo_key" id="bizinfoKeyInput" placeholder="발급받은 기업마당 API 키" /></label>
+            <label class="wide">API 키
+              <div class="input-eye-wrap">
+                <input type="password" name="bizinfo_key" id="bizinfoKeyInput" placeholder="발급받은 기업마당 API 키" />
+                <button type="button" class="eye-toggle" data-eye-toggle="bizinfoKeyInput" aria-label="API 키 표시/숨기기"></button>
+              </div>
+            </label>
             <button class="primary wide" type="submit">저장</button>
           </form>
           <p class="meta" id="bizinfoKeyStatus"></p>

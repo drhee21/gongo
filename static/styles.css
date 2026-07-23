@@ -66,6 +66,9 @@ pre{white-space:pre-wrap;background:var(--panel2);border:1px solid var(--line);b
 .form-grid label.checkbox{display:flex;flex-direction:row;align-items:center;gap:8px}
 .form-grid label.checkbox input{width:auto}
 .wide{grid-column:1/-1}
+.input-eye-wrap{position:relative}
+.input-eye-wrap input{width:100%;padding-right:40px}
+.eye-toggle{position:absolute;right:4px;top:50%;transform:translateY(-50%);background:transparent;border:0;cursor:pointer;color:var(--muted);padding:6px;display:flex;align-items:center;justify-content:center;border-radius:6px}
 .table{width:100%;border-collapse:collapse}
 .table th,.table td{border-bottom:1px solid var(--line);padding:10px;text-align:left;font-size:13px}
 .calendar-list{display:grid;gap:12px}
