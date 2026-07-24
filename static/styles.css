@@ -76,7 +76,8 @@ pre{white-space:pre-wrap;background:var(--panel2);border:1px solid var(--line);b
 .calendar-list{display:grid;gap:12px}
 .day{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px;box-shadow:var(--shadow)}
 .day h3{margin:0 0 10px;color:var(--brand)}
-.day a{display:block;color:var(--text);text-decoration:none;margin:8px 0}
+.day-entry{display:flex;align-items:center;gap:8px;margin:8px 0}
+.day-entry a{color:var(--text);text-decoration:none}
 .empty{color:var(--muted);padding:30px;text-align:center;border:1px dashed var(--line);border-radius:14px}
 .cal-nav{display:flex;align-items:center;gap:8px}
 .cal-month-label{font-weight:700;min-width:88px;text-align:center}

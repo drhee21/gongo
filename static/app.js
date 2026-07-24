@@ -247,7 +247,7 @@ function renderCalendar(){
   if(calSelectedDate && days.includes(calSelectedDate)) days = [calSelectedDate];
 
   $('#calendarList').innerHTML = days.length ? days.map(d=>`
-    <div class="day" data-date="${esc(d)}"><h3>${esc(d)}</h3>${groups[d].map(a=>`<a href="${esc(a.url)}" target="_blank">${esc(a.title)} <span class="badge ${statusClass(a.status)}">${esc(ddayText(a))}</span></a>`).join('')}</div>`).join('') : `<div class="empty">이번 달 마감인 공고가 없습니다.</div>`;
+    <div class="day" data-date="${esc(d)}"><h3>${esc(d)}</h3>${groups[d].map(a=>`<div class="day-entry"><a href="${esc(a.url)}" target="_blank">${esc(a.title)}</a> <span class="badge ${statusClass(a.status)}">${esc(ddayText(a))}</span></div>`).join('')}</div>`).join('') : `<div class="empty">이번 달 마감인 공고가 없습니다.</div>`;
 }
 
 function cleanSourceRows(rawSources){
