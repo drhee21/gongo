@@ -246,8 +246,11 @@ function renderCalendar(){
   let days = Object.keys(groups).filter(d=>d.startsWith(monthPrefix)).sort();
   if(calSelectedDate && days.includes(calSelectedDate)) days = [calSelectedDate];
 
-  $('#calendarList').innerHTML = days.length ? days.map(d=>`
-    <div class="day" data-date="${esc(d)}"><h3>${esc(d)}</h3>${groups[d].map(a=>`<div class="day-entry"><a href="${esc(a.url)}" target="_blank">${esc(a.title)}</a> <span class="badge ${statusClass(a.status)}">${esc(ddayText(a))}</span></div>`).join('')}</div>`).join('') : `<div class="empty">이번 달 마감인 공고가 없습니다.</div>`;
+  $('#calendarList').innerHTML = days.length ? days.map(d=>{
+    const entries = groups[d];
+    const rep = entries[0];
+    return `<div class="day" data-date="${esc(d)}"><h3>${esc(d)} <span class="badge ${statusClass(rep.status)}">${esc(ddayText(rep))}</span></h3>${entries.map(a=>`<div class="day-entry"><a href="${esc(a.url)}" target="_blank">${esc(a.title)}</a></div>`).join('')}</div>`;
+  }).join('') : `<div class="empty">이번 달 마감인 공고가 없습니다.</div>`;
 }
 
 function cleanSourceRows(rawSources){
