@@ -438,7 +438,10 @@ $('#calNext')?.addEventListener('click', ()=>{
 });
 $('#calToday')?.addEventListener('click', ()=>{
   const t = new Date();
+  const pad2 = n => String(n).padStart(2, '0');
+  const todayStr = `${t.getFullYear()}-${pad2(t.getMonth()+1)}-${pad2(t.getDate())}`;
   calViewDate = {y: t.getFullYear(), m: t.getMonth()+1};
+  if(notices.some(a=>a.end===todayStr)) calSelectedDate = todayStr;
   renderCalendar();
 });
 $('#btnCollect')?.addEventListener('click', recollect);
