@@ -198,6 +198,7 @@ function bindNoticeEvents(root){
 }
 
 let calViewDate = null;
+let calSelectedDate = null;
 
 function renderCalendar(){
   const today = new Date();
@@ -222,7 +223,7 @@ function renderCalendar(){
   for(let d=1; d<=daysInMonth; d++){
     const dateStr = `${y}-${pad2(m)}-${pad2(d)}`;
     const dayNotices = groups[dateStr] || [];
-    cells.push(`<div class="cal-cell ${dateStr===todayStr?'today':''} ${dayNotices.length?'has-notice':''}" data-date="${dateStr}">
+    cells.push(`<div class="cal-cell ${dateStr===todayStr?'today':''} ${dayNotices.length?'has-notice':''} ${dateStr===calSelectedDate?'selected':''}" data-date="${dateStr}">
       <div class="cal-daynum">${d}</div>
       ${dayNotices.length ? `<div class="cal-count">${dayNotices.length}건</div>` : ''}
     </div>`);
@@ -235,14 +236,16 @@ function renderCalendar(){
     `;
     grid.querySelectorAll('.cal-cell.has-notice').forEach(cell=>{
       cell.addEventListener('click', ()=>{
-        const target = [...$$('#calendarList .day')].find(el=>el.dataset.date===cell.dataset.date);
-        target?.scrollIntoView({behavior:'smooth', block:'center'});
+        calSelectedDate = calSelectedDate === cell.dataset.date ? null : cell.dataset.date;
+        renderCalendar();
       });
     });
   }
 
   const monthPrefix = `${y}-${pad2(m)}-`;
-  const days = Object.keys(groups).filter(d=>d.startsWith(monthPrefix)).sort();
+  let days = Object.keys(groups).filter(d=>d.startsWith(monthPrefix)).sort();
+  if(calSelectedDate && days.includes(calSelectedDate)) days = [calSelectedDate];
+
   $('#calendarList').innerHTML = days.length ? days.map(d=>`
     <div class="day" data-date="${esc(d)}"><h3>${esc(d)}</h3>${groups[d].map(a=>`<a href="${esc(a.url)}" target="_blank">${esc(a.title)} <span class="badge ${statusClass(a.status)}">${esc(ddayText(a))}</span></a>`).join('')}</div>`).join('') : `<div class="empty">이번 달 마감인 공고가 없습니다.</div>`;
 }
