@@ -78,8 +78,11 @@ pre{white-space:pre-wrap;background:var(--panel2);border:1px solid var(--line);b
 .calendar-list{display:grid;gap:12px}
 .day{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px;box-shadow:var(--shadow)}
 .day h3{margin:0 0 10px;color:var(--brand)}
-.day-entry{display:flex;align-items:center;gap:8px;margin:8px 0}
-.day-entry a{color:var(--text);text-decoration:none}
+.day-entry{display:flex;align-items:center;gap:10px;padding:9px 4px;border-bottom:1px solid var(--line);border-radius:8px}
+.day-entry:last-child{border-bottom:none}
+.day-entry:hover{background:var(--panel2)}
+.day-entry::before{content:'';flex:0 0 auto;width:6px;height:6px;border-radius:50%;background:var(--brand);opacity:.5}
+.day-entry a{color:var(--text);text-decoration:none;flex:1}
 .empty{color:var(--muted);padding:30px;text-align:center;border:1px dashed var(--line);border-radius:14px}
 .cal-nav{display:flex;align-items:center;gap:8px}
 .cal-month-label{font-weight:700;min-width:88px;text-align:center}
