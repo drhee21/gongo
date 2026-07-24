@@ -462,20 +462,16 @@ $('#companyForm')?.addEventListener('submit', async e=>{
 });
 $('#btnAiFit')?.addEventListener('click', async ()=>{
   const btn = $('#btnAiFit');
-  const result = $('#aiFitResult');
   if(btn){
     btn.disabled = true;
     btn.dataset.originalText = btn.textContent;
     btn.textContent = 'AI 분석 중...';
   }
-  if(result) result.textContent = 'AI 분석 중... (공고 건수에 따라 수 분 걸릴 수 있습니다)';
   try{
     const res = await api('/api/ai-fit', {method:'POST', body:'{}'});
-    if(result) result.textContent = `분석 완료: 총 ${res.count}건\n${JSON.stringify(res.counts, null, 2)}`;
     await loadAll();
     toast(`AI 분석 완료: 총 ${res.count}건`, 'success');
   }catch(err){
-    if(result) result.textContent = err.stack || err.message;
     toast(`AI 분석 실패: ${err.message}`, 'error');
   }finally{
     if(btn){
