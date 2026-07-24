@@ -134,8 +134,7 @@ def judge_company_fit(
     if documents_text:
         profile_block += f"\n\n[회사 관련 첨부 문서]\n{documents_text}"
 
-    out: Dict[str, Dict[str, str]] = {}
-    for batch in _chunks(notices, CHUNK_SIZE):
+    def call_batch(batch: List[Dict[str, Any]]) -> Dict[str, Dict[str, str]]:
         briefs = [_notice_brief(n) for n in batch]
         # 회사 정보/문서 블록은 청크마다 동일하게 반복되므로 별도 content block으로
         # 분리해 cache_control을 붙인다 — 같은 실행 안의 반복 호출이 캐시를 재사용해
@@ -181,12 +180,25 @@ def judge_company_fit(
 
         text = next((b.text for b in response.content if b.type == "text"), None)
         if not text:
-            continue
+            return {}
         data = json.loads(text)
+        result: Dict[str, Dict[str, str]] = {}
         for r in data.get("results", []):
             nid = r.get("id")
             if not nid:
                 continue
-            out[nid] = {"fit": r.get("fit") or "unsure", "reason": r.get("reason") or ""}
+            result[nid] = {"fit": r.get("fit") or "unsure", "reason": r.get("reason") or ""}
+        return result
+
+    out: Dict[str, Dict[str, str]] = {}
+    for batch in _chunks(notices, CHUNK_SIZE):
+        out.update(call_batch(batch))
+
+        # 모델이 배치 안의 공고 일부를 응답에서 빠뜨리는 경우가 있다 —
+        # 프롬프트에서 전부 반환하라고 지시해도 가끔 누락되므로, 빠진 공고만
+        # 추려 한 번 더 요청해 채운다. 재시도에도 빠지면 그대로 결과 없음으로 둔다.
+        missing = [n for n in batch if n.get("id") not in out]
+        if missing:
+            out.update(call_batch(missing))
 
     return out
