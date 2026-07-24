@@ -279,7 +279,7 @@ def collect_bizinfo(cfg: Dict[str, Any], route: Dict[str, List[str]]) -> Dict[st
         exc = pick(it, "excInsttNm") or ""
         cat = pick(it, "pldirSportRealmLclasCodeNm", "category", "realmNm") or "경영·기술"
         target = pick(it, "trgetNm", "target", "aplyTrgt") or ""
-        haystack = f"{title} {org or ''} {exc} {pick(it, 'hashTags') or ''}"
+        haystack = f"{title} {org or ''} {exc} {pick(it, 'hashtags') or ''}"
         src = "bizinfo"
         for route_src, keywords in (route or {}).items():
             if route_src.startswith("_"):
