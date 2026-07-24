@@ -463,6 +463,14 @@ $('#companyForm')?.addEventListener('submit', async e=>{
   renderList();
   toast('회사 정보 저장 완료', 'success');
 });
+$('#btnDeleteCompany')?.addEventListener('click', async ()=>{
+  if(!confirm('저장된 회사 정보를 삭제할까요?')) return;
+  const res = await api('/api/company', {method:'POST', body:JSON.stringify({})});
+  company = res.company || {};
+  fillCompany();
+  renderList();
+  toast('회사 정보 삭제 완료', 'success');
+});
 $('#btnAiFit')?.addEventListener('click', async ()=>{
   const btn = $('#btnAiFit');
   if(btn){

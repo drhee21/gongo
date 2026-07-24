@@ -126,7 +126,10 @@
           <label class="checkbox wide"><input type="checkbox" name="keyword_mode_and" /> 키워드 모두 일치해야 적합 — 기본은 하나 이상 일치 시 적합</label>
           <label class="checkbox"><input type="checkbox" name="venture" /> 벤처기업 인증 보유</label>
           <label class="checkbox"><input type="checkbox" name="rnd_center" /> 기업부설연구소 보유</label>
-          <button class="primary wide" type="submit">저장</button>
+          <div class="wide form-actions">
+            <button class="primary" type="submit">저장</button>
+            <button class="button" type="button" id="btnDeleteCompany">회사 정보 삭제</button>
+          </div>
         </form>
         <div class="panel">
           <h2>Claude API 키</h2>
@@ -167,7 +170,7 @@
           <p>회사소개서·인증서·실적자료 등을 올리면 AI 맞춤 분석이 이 내용까지 참고해서 판단합니다 (PDF, DOCX, TXT, MD · 파일당 8MB · 최대 10개).</p>
           <form id="companyDocsForm" class="form-grid">
             <label class="wide">파일 선택<input type="file" name="files" id="companyDocsInput" accept=".pdf,.docx,.txt,.md" multiple /></label>
-            <button class="primary wide" type="submit">업로드</button>
+            <div class="wide form-actions"><button class="primary" type="submit">업로드</button></div>
           </form>
           <div id="companyDocsList" class="doc-list"></div>
         </div>
