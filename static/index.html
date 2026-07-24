@@ -134,11 +134,14 @@
           <form id="apiKeyForm" class="form-grid">
             <label class="wide">API 키
               <div class="input-eye-wrap">
-                <input type="password" name="api_key" id="apiKeyInput" placeholder="sk-ant-..." />
+                <input type="password" name="api_key" id="apiKeyInput" placeholder="sk-ant-... (비워두면 변경 없음)" />
                 <button type="button" class="eye-toggle" data-eye-toggle="apiKeyInput" aria-label="API 키 표시/숨기기"></button>
               </div>
             </label>
-            <button class="primary wide" type="submit">저장</button>
+            <div class="wide form-actions">
+              <button class="primary" type="submit">저장</button>
+              <button class="button" type="button" id="btnDeleteApiKey">키 삭제</button>
+            </div>
           </form>
           <p class="meta" id="apiKeyStatus"></p>
         </div>
@@ -148,11 +151,14 @@
           <form id="bizinfoKeyForm" class="form-grid">
             <label class="wide">API 키
               <div class="input-eye-wrap">
-                <input type="password" name="bizinfo_key" id="bizinfoKeyInput" placeholder="발급받은 기업마당 API 키" />
+                <input type="password" name="bizinfo_key" id="bizinfoKeyInput" placeholder="발급받은 기업마당 API 키 (비워두면 변경 없음)" />
                 <button type="button" class="eye-toggle" data-eye-toggle="bizinfoKeyInput" aria-label="API 키 표시/숨기기"></button>
               </div>
             </label>
-            <button class="primary wide" type="submit">저장</button>
+            <div class="wide form-actions">
+              <button class="primary" type="submit">저장</button>
+              <button class="button" type="button" id="btnDeleteBizinfoKey">키 삭제</button>
+            </div>
           </form>
           <p class="meta" id="bizinfoKeyStatus"></p>
         </div>

@@ -450,7 +450,10 @@ $('#companyForm')?.addEventListener('submit', async e=>{
   e.preventDefault();
   const form = e.currentTarget;
   const data = Object.fromEntries(new FormData(form).entries());
-  data.years = data.years === '' ? '' : Number(data.years);
+  ['name','years','region','sector','keywords'].forEach(k=>{
+    if(typeof data[k] === 'string' && data[k].trim() === '') delete data[k];
+  });
+  if(data.years !== undefined) data.years = Number(data.years);
   data.venture = form.elements.venture.checked;
   data.rnd_center = form.elements.rnd_center.checked;
   data.keyword_mode = form.elements.keyword_mode_and.checked ? 'and' : 'or';
@@ -485,12 +488,23 @@ $('#apiKeyForm')?.addEventListener('submit', async e=>{
   e.preventDefault();
   const form = e.currentTarget;
   const data = Object.fromEntries(new FormData(form).entries());
+  if(!data.api_key){ toast('입력한 내용이 없어 변경하지 않았습니다'); return; }
   try{
     const res = await api('/api/me/api-key', {method:'POST', body:JSON.stringify({api_key: data.api_key})});
     if(currentUserState) currentUserState.has_api_key = res.has_api_key;
     updateApiKeyStatus();
     form.reset();
-    toast(res.has_api_key ? 'API 키 저장 완료' : 'API 키 삭제 완료', 'success');
+    toast('API 키 저장 완료', 'success');
+  }catch(err){ toast(err.message, 'error'); }
+});
+$('#btnDeleteApiKey')?.addEventListener('click', async ()=>{
+  if(!confirm('등록된 Claude API 키를 삭제할까요?')) return;
+  try{
+    const res = await api('/api/me/api-key', {method:'POST', body:JSON.stringify({api_key: ''})});
+    if(currentUserState) currentUserState.has_api_key = res.has_api_key;
+    updateApiKeyStatus();
+    $('#apiKeyForm')?.reset();
+    toast('API 키 삭제 완료', 'success');
   }catch(err){ toast(err.message, 'error'); }
 });
 
@@ -498,13 +512,25 @@ $('#bizinfoKeyForm')?.addEventListener('submit', async e=>{
   e.preventDefault();
   const form = e.currentTarget;
   const data = Object.fromEntries(new FormData(form).entries());
+  if(!data.bizinfo_key){ toast('입력한 내용이 없어 변경하지 않았습니다'); return; }
   try{
     const res = await api('/api/me/bizinfo-key', {method:'POST', body:JSON.stringify({bizinfo_key: data.bizinfo_key})});
     if(currentUserState) currentUserState.has_bizinfo_key = res.has_bizinfo_key;
     updateApiKeyStatus();
     form.reset();
     await loadAll();
-    toast(res.has_bizinfo_key ? '기업마당 API 키 저장 완료' : '기업마당 API 키 삭제 완료', 'success');
+    toast('기업마당 API 키 저장 완료', 'success');
+  }catch(err){ toast(err.message, 'error'); }
+});
+$('#btnDeleteBizinfoKey')?.addEventListener('click', async ()=>{
+  if(!confirm('등록된 기업마당 API 키를 삭제할까요?')) return;
+  try{
+    const res = await api('/api/me/bizinfo-key', {method:'POST', body:JSON.stringify({bizinfo_key: ''})});
+    if(currentUserState) currentUserState.has_bizinfo_key = res.has_bizinfo_key;
+    updateApiKeyStatus();
+    $('#bizinfoKeyForm')?.reset();
+    await loadAll();
+    toast('기업마당 API 키 삭제 완료', 'success');
   }catch(err){ toast(err.message, 'error'); }
 });
 
