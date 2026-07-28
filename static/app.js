@@ -118,7 +118,7 @@ function noticeHTML(a){
       <h3>${esc(a.title)}</h3>
       <div class="meta">${esc(a.org)} · ${esc(a.category)} · ${a.dates_unknown ? '날짜 미상' : `${a.start ? esc(a.start) + ' ' : ''}~ ${a.end ? esc(a.end) : (a.status === '상시' ? '상시' : '-')}`}</div>
       <div class="badges">
-        <span class="badge ${statusClass(a.status)}">${esc(a.status)}</span>
+        <span class="badge ${statusClass(a.status)}">${esc(a.status)}${a.status_inferred ? '?' : ''}</span>
         ${ddayText(a) !== a.status ? `<span class="badge ${a.dday != null && a.dday <= 7 && a.dday >= 0 ? 'urgent' : ''}">${esc(ddayText(a))}</span>` : ''}
         ${aiFitBadge(a)}
       </div>

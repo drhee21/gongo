@@ -14,7 +14,7 @@ from datetime import datetime
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 from urllib.parse import parse_qs, unquote, urlparse
 
 import auth
@@ -52,30 +52,51 @@ def json_bytes(obj: Any, status: int = 200) -> bytes:
     return json.dumps(obj, ensure_ascii=False, indent=2).encode("utf-8")
 
 
-def status_of(a: Dict[str, Any]) -> str:
+def status_of(a: Dict[str, Any]) -> Tuple[str, bool]:
+    """공고의 접수 상태와, 그 상태가 추정값인지 여부를 함께 반환한다.
+
+    상태값(접수중/접수예정/마감/상시/날짜 미상)은 "지금 어떤 상태인가"만
+    나타내고, "그 판단을 확신할 수 있는가"는 별도 불리언으로 분리한다.
+    두 축을 상태값 하나에 섞으면(예: '확인 필요' 같은 값을 추가하면) 상태
+    가짓수만 늘고 의미도 흐려지므로, dates_unknown/rolling_confirmed와
+    같은 방식으로 플래그를 따로 둔다.
+
+    추정으로 표시되는 경우는 날짜 한쪽을 몰라 접수 시작 여부를 확신할 수
+    없을 때뿐이다. 마감일이 지났거나(마감) 시작일이 아직 안 왔으면(접수예정)
+    나머지 날짜를 몰라도 판단이 확실하므로 추정이 아니다.
+    """
     end = a.get("end")
     start = a.get("start")
     today = datetime.now().date()
     if a.get("dates_unknown"):
-        return "날짜 미상"
+        return "날짜 미상", False
     if not end:
-        # 상시/수시/소진 같은 명시적 표현으로 확인된 경우만 진짜 상시로 보여준다.
-        # 그런 표현 없이 시작일만 알고 마감일을 못 찾은 경우는 dates_unknown인
-        # 경우(정보가 아예 없음)와 화면 상태는 동일하게 "날짜 미상"으로 보여준다 —
-        # 다만 dates_unknown 자체는 데이터에서 계속 구분해서 남기므로, 시작일을
-        # 알고 있으면 메타 줄에는 그 시작일이 그대로 표시된다.
-        return "상시" if a.get("rolling_confirmed") else "날짜 미상"
+        # 상시/수시/소진 같은 명시적 표현으로 확인된 경우만 진짜 상시로 본다.
+        if a.get("rolling_confirmed"):
+            return "상시", False
+        if start:
+            try:
+                s = datetime.strptime(start, "%Y-%m-%d").date()
+            except Exception:
+                return "날짜 미상", False
+            if s > today:
+                return "접수예정", False
+            # 시작일은 지났는데 마감일을 모른다 — 아직 접수 중인지 확신할 수 없다.
+            return "접수중", True
+        return "날짜 미상", False
     try:
         e = datetime.strptime(end, "%Y-%m-%d").date()
         if e < today:
-            return "마감"
+            return "마감", False
         if start:
             s = datetime.strptime(start, "%Y-%m-%d").date()
             if s > today:
-                return "접수예정"
-        return "접수중"
+                return "접수예정", False
+            return "접수중", False
+        # 마감일은 안 지났는데 시작일을 모른다 — 접수가 이미 시작됐는지 확신할 수 없다.
+        return "접수중", True
     except Exception:
-        return "날짜 미상"
+        return "날짜 미상", False
 
 
 def dday(a: Dict[str, Any]) -> Any:
@@ -100,7 +121,7 @@ def add_runtime_fields(items):
     for a in items:
         b = dict(a)
         b["src"] = canonical_source_id(b.get("src") or b.get("source") or "unknown")
-        b["status"] = status_of(b)
+        b["status"], b["status_inferred"] = status_of(b)
         b["dday"] = dday(b)
         out.append(b)
     return out
