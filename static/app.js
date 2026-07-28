@@ -167,7 +167,25 @@ function renderList(){
   $('#kpiOpen').textContent = notices.filter(x=>x.status!=='마감').length;
   $('#kpiUrgent').textContent = notices.filter(x=>x.dday != null && x.dday >= 0 && x.dday <= 7).length;
   $('#kpiFav').textContent = favs.length;
+  renderAiFitMini();
   renderCalendar();
+}
+
+function renderAiFitMini(){
+  const box = $('#aiFitMiniBox');
+  const el = $('#aiFitMini');
+  if(!box || !el) return;
+  const judged = notices.filter(x=>x.ai_fit);
+  if(!judged.length){ box.classList.add('hidden'); return; }
+  box.classList.remove('hidden');
+  const counts = {fit:0, unfit:0, unsure:0};
+  judged.forEach(x=>{ counts[x.ai_fit] = (counts[x.ai_fit]||0) + 1; });
+  const rows = [
+    ['적합', counts.fit, 'state-ok'],
+    ['확인', counts.unsure, 'state-wait'],
+    ['부적합', counts.unfit, 'state-bad'],
+  ];
+  el.innerHTML = rows.map(([label, n, cls])=>`<div class="source-mini"><span>${label}</span><span class="${cls}">${n}</span></div>`).join('');
 }
 
 function bindNoticeEvents(root){
