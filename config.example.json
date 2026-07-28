@@ -9,7 +9,6 @@
   },
   "bizinfo": {
     "enabled": false,
-    "crtfcKey": "여기에_기업마당_API키",
     "page_unit": 200
   },
   "kstartup": {

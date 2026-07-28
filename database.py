@@ -717,6 +717,24 @@ def set_user_bizinfo_key(user_id: str, encrypted_key: Optional[str]) -> None:
         con.execute("UPDATE users SET bizinfo_api_key_enc=? WHERE id=?", (encrypted_key, user_id))
 
 
+def get_any_bizinfo_key_enc() -> Optional[str]:
+    """수집기가 사용할 기업마당 API 키를 등록된 사용자 중에서 찾는다.
+
+    config.json에는 더 이상 공용 키를 두지 않는다 — 실제로 그 키를
+    등록한 사용자 본인만 결과를 볼 수 있어야 하므로, 수집도 등록된
+    사용자의 키로만 이뤄져야 한다. 관리자가 등록한 키를 우선하고,
+    없으면 아무 사용자나 등록한 키를 사용한다. 암호화된 채로 반환하므로
+    호출부에서 auth.decrypt_secret으로 복호화해야 한다.
+    """
+    init_db()
+    with connect() as con:
+        row = con.execute(
+            "SELECT bizinfo_api_key_enc FROM users WHERE bizinfo_api_key_enc IS NOT NULL "
+            "ORDER BY is_admin DESC, created_at ASC LIMIT 1"
+        ).fetchone()
+    return row["bizinfo_api_key_enc"] if row else None
+
+
 def create_session(user_id: str, token: str, ttl_days: int = 30) -> None:
     init_db()
     ts = now_iso()

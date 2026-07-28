@@ -26,6 +26,7 @@ from urllib.parse import urljoin, urlparse
 import requests
 from bs4 import BeautifulSoup
 
+import auth
 import database
 
 ROOT = Path(__file__).resolve().parent
@@ -245,11 +246,13 @@ class CollectRun:
 def collect_bizinfo(cfg: Dict[str, Any], route: Dict[str, List[str]]) -> Dict[str, List[Dict[str, Any]]]:
     if not cfg.get("enabled", False):
         raise RuntimeError("비활성화됨")
-    key = cfg.get("crtfcKey")
-    if is_blank_key(key):
-        key = os.environ.get("BIZINFO_API_KEY")
-    if is_blank_key(key):
-        raise RuntimeError("기업마당 API 키가 없습니다")
+    # 기업마당 API 키는 config.json에 두지 않는다 — 그 키를 실제로 등록한
+    # 사용자만 결과를 볼 수 있어야 하므로, 수집도 등록된 사용자의 키로만
+    # 이뤄진다. 관리자가 등록한 키를 우선 사용한다.
+    key_enc = database.get_any_bizinfo_key_enc()
+    if not key_enc:
+        raise RuntimeError("등록된 기업마당 API 키가 없습니다. '회사 정보'에서 먼저 키를 등록해주세요")
+    key = auth.decrypt_secret(key_enc)
 
     params = {
         "crtfcKey": key,
