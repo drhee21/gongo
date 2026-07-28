@@ -410,21 +410,17 @@ function updateApiKeyStatus(){
 }
 
 async function recollect(){
-  const result = $('#collectResult');
-  const btns = $$('#btnCollect, #btnCollectAdmin');
+  const btns = $$('#btnCollect');
   btns.forEach(b=>{
     b.disabled = true;
     b.dataset.originalText = b.textContent;
     b.textContent = '업데이트 중...';
   });
-  if(result) result.textContent = '업데이트 중...';
   try{
     const res = await api('/api/recollect', {method:'POST', body:'{}'});
-    if(result) result.textContent = JSON.stringify(res, null, 2);
     await loadAll();
     toast(`업데이트 완료: ${res.count}건`, 'success');
   }catch(err){
-    if(result) result.textContent = err.stack || err.message;
     toast(`업데이트 실패: ${err.message}`, 'error');
   }finally{
     btns.forEach(b=>{
@@ -466,7 +462,6 @@ $('#calToday')?.addEventListener('click', ()=>{
   renderCalendar();
 });
 $('#btnCollect')?.addEventListener('click', recollect);
-$('#btnCollectAdmin')?.addEventListener('click', recollect);
 $('#companyForm')?.addEventListener('submit', async e=>{
   e.preventDefault();
   const form = e.currentTarget;
