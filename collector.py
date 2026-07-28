@@ -254,45 +254,65 @@ def collect_bizinfo(cfg: Dict[str, Any], route: Dict[str, List[str]]) -> Dict[st
         raise RuntimeError("등록된 기업마당 API 키가 없습니다. '회사 정보'에서 먼저 키를 등록해주세요")
     key = auth.decrypt_secret(key_enc)
 
-    params = {
-        "crtfcKey": key,
-        "dataType": "json",
-        "pageIndex": "1",
-        "pageUnit": str(cfg.get("page_unit", 200)),
-    }
-    r = SESSION.get("https://www.bizinfo.go.kr/uss/rss/bizinfoApi.do", params=params, timeout=cfg.get("timeout_sec", 20))
-    r.raise_for_status()
-    data = r.json()
-    rows = data.get("jsonArray", data) if isinstance(data, dict) else data
-    if isinstance(rows, dict):
-        rows = rows.get("item", [])
+    page_unit = int(cfg.get("page_unit", 200))
+    max_items = int(cfg.get("max_items_per_source", 80))
+    timeout = cfg.get("timeout_sec", 20)
+    delay = cfg.get("request_delay_sec", 0.8)
 
+    # bizinfo 응답을 라우팅 키워드에 따라 bizinfo/biohub/khidi 세 묶음으로 나누는데,
+    # 각 묶음은 collect_all()에서 따로따로 max_items_per_source만큼 잘린다. 그래서
+    # "bizinfo 묶음이 최소 max_items만큼 찰 때까지" 페이지를 계속 넘긴다 —
+    # 대부분의 공고가 bizinfo 묶음에 남으므로 이게 사실상의 종료 조건이다.
     out = {"bizinfo": [], "biohub": [], "khidi": []}
-    for it in rows or []:
-        if not isinstance(it, dict):
-            continue
-        title = pick(it, "pblancNm", "title", "bizNm")
-        if not title:
-            continue
-        period_text = pick(it, "reqstBeginEndDe", "reqstDt", "period")
-        start, end = parse_period(period_text)
-        rel_url = clean(pick(it, "pblancUrl", "url") or "")
-        url = urljoin("https://www.bizinfo.go.kr", rel_url)
-        org = pick(it, "jrsdInsttNm", "excInsttNm", "insttNm")
-        exc = pick(it, "excInsttNm") or ""
-        cat = pick(it, "pldirSportRealmLclasCodeNm", "category", "realmNm") or "경영·기술"
-        target = pick(it, "trgetNm", "target", "aplyTrgt") or ""
-        haystack = f"{title} {org or ''} {exc} {pick(it, 'hashtags') or ''}"
-        src = "bizinfo"
-        for route_src, keywords in (route or {}).items():
-            if route_src.startswith("_"):
+    page = 1
+    while len(out["bizinfo"]) < max_items:
+        params = {
+            "crtfcKey": key,
+            "dataType": "json",
+            "pageIndex": str(page),
+            "pageUnit": str(page_unit),
+        }
+        r = SESSION.get("https://www.bizinfo.go.kr/uss/rss/bizinfoApi.do", params=params, timeout=timeout)
+        r.raise_for_status()
+        data = r.json()
+        rows = data.get("jsonArray", data) if isinstance(data, dict) else data
+        if isinstance(rows, dict):
+            rows = rows.get("item", [])
+        if not rows:
+            break
+
+        for it in rows:
+            if not isinstance(it, dict):
                 continue
-            if any(kw and kw in haystack for kw in keywords):
-                src = route_src
-                break
-        item = normalize(src, title, org, cat, start, end, url, elig=elig_from_text(target, title, haystack), raw=it)
-        mark_dates_unknown_if_needed(item, period_text or "", start_was_known=bool(start))
-        out.setdefault(src, []).append(item)
+            title = pick(it, "pblancNm", "title", "bizNm")
+            if not title:
+                continue
+            period_text = pick(it, "reqstBeginEndDe", "reqstDt", "period")
+            start, end = parse_period(period_text)
+            rel_url = clean(pick(it, "pblancUrl", "url") or "")
+            url = urljoin("https://www.bizinfo.go.kr", rel_url)
+            org = pick(it, "jrsdInsttNm", "excInsttNm", "insttNm")
+            exc = pick(it, "excInsttNm") or ""
+            cat = pick(it, "pldirSportRealmLclasCodeNm", "category", "realmNm") or "경영·기술"
+            target = pick(it, "trgetNm", "target", "aplyTrgt") or ""
+            haystack = f"{title} {org or ''} {exc} {pick(it, 'hashtags') or ''}"
+            src = "bizinfo"
+            for route_src, keywords in (route or {}).items():
+                if route_src.startswith("_"):
+                    continue
+                if any(kw and kw in haystack for kw in keywords):
+                    src = route_src
+                    break
+            item = normalize(src, title, org, cat, start, end, url, elig=elig_from_text(target, title, haystack), raw=it)
+            mark_dates_unknown_if_needed(item, period_text or "", start_was_known=bool(start))
+            out.setdefault(src, []).append(item)
+
+        if len(rows) < page_unit:
+            break
+        page += 1
+        if delay:
+            time.sleep(delay)
+
     return out
 
 
@@ -320,7 +340,7 @@ def collect_g2b(cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
         return []
 
     days = int(cfg.get("days", 3))
-    max_pages = int(cfg.get("max_pages", 6))
+    max_items = int(cfg.get("max_items_per_source", 80))
     num_of_rows = int(cfg.get("page_unit", 500))
     timeout = cfg.get("timeout_sec", 20)
     delay = cfg.get("request_delay_sec", 0.3)
@@ -333,7 +353,10 @@ def collect_g2b(cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     seen_ids = set()
     for op_name in G2B_OPERATIONS:
-        for page in range(1, max_pages + 1):
+        if len(out) >= max_items:
+            break
+        page = 1
+        while len(out) < max_items:
             params = {
                 "serviceKey": key,
                 "pageNo": str(page),
@@ -390,10 +413,14 @@ def collect_g2b(cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
                 )
                 mark_dates_unknown_if_needed(g2b_item, haystack, start_was_known=bool(start))
                 out.append(g2b_item)
+                if len(out) >= max_items:
+                    break
 
-            if len(items) < num_of_rows:
+            if len(out) >= max_items or len(items) < num_of_rows:
                 break
-            time.sleep(delay)
+            page += 1
+            if delay:
+                time.sleep(delay)
 
     return out
 
@@ -505,9 +532,8 @@ def collect_kstartup(cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
 
     이 페이지는 한 번에 15건씩만 보여주고 페이지 크기를 늘릴 수 없어서(API가
     아니라 서버 렌더링 HTML), 더 가져오려면 여러 페이지(?page=N)를 순회해야
-    한다. max_pages로 몇 페이지까지 순회할지, max_items로 최종 건수를 각각
-    제한한다. 사이트가 알려주는 마지막 페이지 번호를 넘어서까지 순회하지
-    않도록 첫 페이지에서 그 값을 읽어 max_pages를 필요하면 줄인다.
+    한다. max_items_per_source에 도달하거나, 사이트가 알려주는 마지막 페이지
+    번호(첫 페이지에서 읽어온다)를 넘어서면 멈춘다.
     """
     if not cfg.get("enabled", False):
         raise RuntimeError("비활성화됨")
@@ -519,13 +545,12 @@ def collect_kstartup(cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
 
     timeout = cfg.get("timeout_sec", 20)
     max_items = int(cfg.get("max_items", cfg.get("max_items_per_source", 80)))
-    max_pages = int(cfg.get("max_pages", 5))
 
     out: List[Dict[str, Any]] = []
     last_error: Optional[Exception] = None
     last_page: Optional[int] = None
     page = 1
-    while page <= max_pages and len(out) < max_items:
+    while (last_page is None or page <= last_page) and len(out) < max_items:
         url = base_url if page == 1 else f"{base_url}?page={page}"
         try:
             r = SESSION.get(url, timeout=timeout)
@@ -534,11 +559,10 @@ def collect_kstartup(cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
                 r.encoding = r.apparent_encoding
             if last_page is None:
                 last_page = detect_kstartup_last_page(r.text)
-                max_pages = min(max_pages, last_page)
             items = parse_kstartup_html_items(r.text, url, max_items=max_items - len(out))
             out.extend(items)
             page += 1
-            if page <= max_pages and len(out) < max_items:
+            if (last_page is None or page <= last_page) and len(out) < max_items:
                 time.sleep(float(cfg.get("request_delay_sec", 0.3)))
         except Exception as e:
             last_error = e
@@ -694,12 +718,6 @@ def collect_kddf(bcfg: Dict[str, Any], common: Dict[str, Any]) -> List[Dict[str,
     if common.get("respect_robots", True) and not robots_allows(list_url):
         raise PermissionError("robots.txt 차단")
 
-    r = SESSION.get(list_url, timeout=common.get("timeout_sec", 20))
-    r.raise_for_status()
-    if not r.encoding or r.encoding.lower() == "iso-8859-1":
-        r.encoding = r.apparent_encoding
-    soup = BeautifulSoup(r.text, "html.parser")
-
     base_url = bcfg.get("base_url") or list_url
     org_default = bcfg.get("org") or bcfg.get("name") or "국가신약개발사업단"
     category = bcfg.get("category") or "R&D"
@@ -709,55 +727,75 @@ def collect_kddf(bcfg: Dict[str, Any], common: Dict[str, Any]) -> List[Dict[str,
     # raw 데이터에만 남긴다(화면 로직에는 아직 반영하지 않음).
     include_state = bool(bcfg.get("include_state", False))
     max_items = int(common.get("max_items_per_source", 60))
+    timeout = common.get("timeout_sec", 20)
+    delay = float(common.get("request_delay_sec", 0.8))
 
     out: List[Dict[str, Any]] = []
     seen = set()
-    for tr in soup.select("div.board_table table tbody tr"):
-        subj = tr.select_one("td.subject")
-        a = subj.select_one("a") if subj else None
-        if not a:
-            continue
-        href = a.get("href", "")
-        url = urljoin(base_url, href)
-        url = re.sub(r"(?<!:)/{2,}", "/", url)
-        if url in seen:
-            continue
-        seen.add(url)
+    page = 1
+    while len(out) < max_items:
+        r = SESSION.get(list_url, params={"page": str(page)}, timeout=timeout)
+        r.raise_for_status()
+        if not r.encoding or r.encoding.lower() == "iso-8859-1":
+            r.encoding = r.apparent_encoding
+        soup = BeautifulSoup(r.text, "html.parser")
 
-        span = a.select_one("span")
-        title_text = a.get_text(" ", strip=True)
-        org = org_default
-        if span:
-            span_text = clean(span.get_text())
-            org = span_text.strip("[]") or org_default
-            title_text = title_text.replace(span_text, "", 1)
-        title = clean(title_text)
-        if len(title) < 4:
-            continue
+        added = 0
+        for tr in soup.select("div.board_table table tbody tr"):
+            subj = tr.select_one("td.subject")
+            a = subj.select_one("a") if subj else None
+            if not a:
+                continue
+            href = a.get("href", "")
+            url = urljoin(base_url, href)
+            url = re.sub(r"(?<!:)/{2,}", "/", url)
+            if url in seen:
+                continue
+            seen.add(url)
 
-        period_el = tr.select_one("td.td_period")
-        period_text = clean(period_el.get_text()) if period_el else ""
-        start = end = None
-        parts = re.split(r"[~∼]", period_text, maxsplit=1)
-        if len(parts) == 2:
-            start = parse_date(parts[0])
-            end = parse_date(parts[1])
+            span = a.select_one("span")
+            title_text = a.get_text(" ", strip=True)
+            org = org_default
+            if span:
+                span_text = clean(span.get_text())
+                org = span_text.strip("[]") or org_default
+                title_text = title_text.replace(span_text, "", 1)
+            title = clean(title_text)
+            if len(title) < 4:
+                continue
 
-        raw: Dict[str, Any] = {"row_text": clean(tr.get_text(" ", strip=True))}
-        if include_state:
-            state_el = tr.select_one("td.td_state div.state_txt")
-            if state_el:
-                raw["state"] = clean(state_el.get_text())
+            period_el = tr.select_one("td.td_period")
+            period_text = clean(period_el.get_text()) if period_el else ""
+            start = end = None
+            parts = re.split(r"[~∼]", period_text, maxsplit=1)
+            if len(parts) == 2:
+                start = parse_date(parts[0])
+                end = parse_date(parts[1])
 
-        item = normalize("kddf", title, org, category, start, end, url, raw=raw)
-        mark_dates_unknown_if_needed(item, period_text, start_was_known=bool(start))
-        out.append(item)
-        if len(out) >= max_items:
+            raw: Dict[str, Any] = {"row_text": clean(tr.get_text(" ", strip=True))}
+            if include_state:
+                state_el = tr.select_one("td.td_state div.state_txt")
+                if state_el:
+                    raw["state"] = clean(state_el.get_text())
+
+            item = normalize("kddf", title, org, category, start, end, url, raw=raw)
+            mark_dates_unknown_if_needed(item, period_text, start_was_known=bool(start))
+            out.append(item)
+            added += 1
+            if len(out) >= max_items:
+                break
+
+        # 페이지에서 새 항목을 하나도 못 뽑았으면(진짜 마지막 페이지를 넘어가면
+        # 이 게시판은 빈 테이블 대신 안내용 빈 행 하나를 내려준다) 더 이상
+        # 페이지가 없다고 보고 멈춘다.
+        if added == 0:
             break
+        page += 1
+        if delay:
+            time.sleep(delay)
 
     if not out:
         raise RuntimeError("0건 파싱: kddf 게시판 구조 확인 필요")
-    time.sleep(float(common.get("request_delay_sec", 0.8)))
     return out
 
 
@@ -775,8 +813,13 @@ def collect_khidi_direct(bcfg: Dict[str, Any], common: Dict[str, Any]) -> List[D
         raise PermissionError("robots.txt 차단")
 
     menu_id = bcfg.get("menu_id") or "MENU01108"
-    row_cnt = int(bcfg.get("row_cnt") or 200)
-    params = {"menuId": menu_id, "rowCnt": row_cnt}
+    # 이 피드는 offset/페이지 파라미터가 없고 rowCnt(상위 N건)만 지원한다 — 실제로
+    # pageIndex/pageNo/startRow/offset 등을 붙여봐도 결과가 동일해 확인했다.
+    # 그래서 "페이지네이션"은 곧 rowCnt를 원하는 최대 건수만큼 요청하는 것과 같다.
+    # 다만 이 API는 rowCnt=N을 주면 실제로는 N-1건만 돌려주는 off-by-one이 있어서
+    # (rowCnt=1 -> 0건, rowCnt=2 -> 1건 ... 실측으로 확인) 1을 더해서 요청한다.
+    max_items = int(common.get("max_items_per_source", 80))
+    params = {"menuId": menu_id, "rowCnt": max_items + 1}
     r = SESSION.get(KHIDI_FEED_URL, params=params, timeout=common.get("timeout_sec", 20))
     r.raise_for_status()
     root = ET.fromstring(r.content)
@@ -784,7 +827,6 @@ def collect_khidi_direct(bcfg: Dict[str, Any], common: Dict[str, Any]) -> List[D
     base_url = bcfg.get("base_url") or "https://www.khidi.or.kr"
     org_default = bcfg.get("org") or bcfg.get("name") or "한국보건산업진흥원"
     category = bcfg.get("category") or "바이오·헬스"
-    max_items = int(common.get("max_items_per_source", 60))
 
     out: List[Dict[str, Any]] = []
     seen = set()
@@ -898,11 +940,11 @@ def collect_nrf_iris(bcfg: Dict[str, Any], common: Dict[str, Any]) -> List[Dict[
 
     timeout = common.get("timeout_sec", 20)
     max_items = int(common.get("max_items_per_source", 60))
-    max_pages = int(bcfg.get("max_pages", 6))
     sep = "&" if "?" in list_url else "?"
 
     out: List[Dict[str, Any]] = []
-    for page in range(1, max_pages + 1):
+    page = 1
+    while True:
         url = list_url if page == 1 else f"{list_url}{sep}pageIndex={page}"
         r = SESSION.get(url, timeout=timeout)
         r.raise_for_status()
@@ -914,6 +956,7 @@ def collect_nrf_iris(bcfg: Dict[str, Any], common: Dict[str, Any]) -> List[Dict[
         out.extend(items)
         if len(out) >= max_items:
             break
+        page += 1
         time.sleep(float(common.get("request_delay_sec", 0.8)))
 
     out = deduplicate(out)
@@ -1126,7 +1169,6 @@ def collect_biohub_direct(bcfg: Dict[str, Any], common: Dict[str, Any]) -> List[
     timeout = common.get("timeout_sec", 20)
     max_items = int(common.get("max_items_per_source", 80))
     delay = float(bcfg.get("detail_delay_sec", 0.06))
-    max_detail_pages = int(bcfg.get("max_detail_pages", max(180, max_items * 6)))
 
     if common.get("respect_robots", True):
         probe = f"{base_url}/front/supportManageReq/supportManageView.do"
@@ -1157,7 +1199,7 @@ def collect_biohub_direct(bcfg: Dict[str, Any], common: Dict[str, Any]) -> List[
         if not (common.get("respect_robots", True) and not robots_allows(effective_list_url)):
             pairs = fetch_biohub_program_list(
                 base_url, timeout,
-                page_size=bcfg.get("list_page_size", max(400, max_detail_pages)),
+                page_size=max_items,
                 list_url=list_url,
             )
             for seq, gubun in pairs:
@@ -1173,7 +1215,7 @@ def collect_biohub_direct(bcfg: Dict[str, Any], common: Dict[str, Any]) -> List[
     out: List[Dict[str, Any]] = []
     used_title_keys = set()
 
-    for url in candidates[:max_detail_pages]:
+    for url in candidates:
         try:
             r = SESSION.get(url, timeout=timeout)
             if r.status_code >= 400:

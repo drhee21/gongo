@@ -15,7 +15,6 @@
     "enabled": true,
     "method": "html",
     "list_url": "https://www.k-startup.go.kr/web/contents/bizpbanc-ongoing.do",
-    "max_pages": 5,
     "max_items": 80,
     "_note": "API 키 없이 K-Startup 모집중 웹페이지 HTML을 직접 크롤링합니다."
   },
@@ -23,7 +22,6 @@
     "enabled": false,
     "serviceKey": "여기에_나라장터_공공데이터포털_서비스키",
     "days": 3,
-    "max_pages": 6,
     "page_unit": 500,
     "keywords": ["바이오", "헬스", "의료", "제약", "신약", "진단", "백신", "유전자", "임상", "병원", "R&D", "연구개발", "보건"],
     "_note": "조달청 나라장터 입찰공고정보서비스(data.go.kr). 전국 물품/용역 입찰공고 중 keywords에 매칭되는 것만 가져옵니다. keywords는 회사 분야에 맞게 바꾸세요."
@@ -49,8 +47,7 @@
       "base_url": "https://www.iris.go.kr",
       "org": "한국연구재단",
       "category": "R&D",
-      "method": "iris",
-      "max_pages": 6
+      "method": "iris"
     },
     "kddf": {
       "enabled": true,
@@ -74,7 +71,6 @@
         "https://www.seoulbiohub.kr/front/supportManageReq/supportManageView.do?gubun=09&seq=736",
         "https://www.seoulbiohub.kr/front/supportManageReq/supportManageView.do?gubun=04&seq=714"
       ],
-      "max_detail_pages": 500,
       "detail_delay_sec": 0.03
     },
     "khidi_direct": {
@@ -82,7 +78,6 @@
       "name": "보건산업진흥원/KHIDI",
       "base_url": "https://www.khidi.or.kr",
       "menu_id": "MENU01108",
-      "row_cnt": 200,
       "org": "한국보건산업진흥원",
       "category": "바이오·헬스"
     }
