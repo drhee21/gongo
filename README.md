@@ -17,13 +17,24 @@ Windows PowerShell에서 바로 실행되도록 설계했습니다.
 
 계정 가입 후 로그인하면 회사 정보/즐겨찾기/AI 분석 결과가 계정별로 분리되어 저장됩니다.
 AI 맞춤 분석은 각자 자신의 Claude API 키를 "회사 정보" 화면에 등록해서 사용합니다 (관리자 키를 공유하지 않음).
-기업마당(bizinfo) 공고도 마찬가지로, 조회하는 사용자가 본인의 기업마당 API 키를 등록해야 볼 수 있습니다.
+기업마당(bizinfo) 공고는 등록된 사용자의 키로만 수집되고, 조회하는 사용자 본인도 키를 등록해야 볼 수 있습니다.
+
+## 화면 구성
+
+왼쪽 사이드바에 5개 탭이 있습니다.
+
+- **공고 목록** : 전체 공고를 검색/필터링해서 봅니다. 소스, 접수 상태, AI 적합도로 필터링할 수 있습니다.
+- **관심 공고** : 별표를 누른 공고만 모아봅니다.
+- **캘린더** : 마감일 기준으로 이번 달 공고를 달력으로 봅니다. 날짜를 클릭하면 그 날 마감인 공고만 필터링되고, 같은 날짜를 다시 클릭하거나 다른 날짜를 클릭하면 필터가 바뀝니다.
+- **회사 정보** : 회사 프로필(업력/지역/분야/키워드 등), Claude API 키, 기업마당 API 키, 회사 문서(PDF/DOCX/TXT/MD)를 등록합니다. 여기서 "AI로 맞춤 공고 분석 실행"을 누르면 전체 공고에 대해 적합/확인/부적합 판정이 붙습니다.
+- **관리자** : `ADMIN_EMAILS`에 등록된 계정에서만 보입니다. 수동 재수집, 소스별 수집 상태, 소스 URL 재정의를 다룹니다.
 
 ## 바로 실행
 
+저장소를 클론한 폴더에서:
+
 ```powershell
-cd C:\Users\USER\Desktop\gongo_fresh_v3
-powershell -ExecutionPolicy Bypass -File .\start-server-v3.ps1
+powershell -ExecutionPolicy Bypass -File .\start-server-v7.ps1
 ```
 
 브라우저:
@@ -45,16 +56,19 @@ K-Startup은 API 키를 쓰지 않고 모집중 웹페이지 HTML을 직접 읽�
   "enabled": true,
   "method": "html",
   "list_url": "https://www.k-startup.go.kr/web/contents/bizpbanc-ongoing.do",
+  "max_pages": 5,
   "max_items": 80
 }
 ```
 
-기업마당은 공식 API 키가 있을 때만 켭니다.
+기업마당은 `enabled: true`로만 켜면 됩니다. API 키는 더 이상 여기에 두지 않습니다 —
+등록된 사용자 중 "회사 정보" 화면에서 본인의 기업마당 API 키를 저장한 사람이 있어야
+수집기가 그 키로 데이터를 가져옵니다 (관리자가 등록해두는 것을 권장). 등록된 키가
+하나도 없으면 이 소스는 건너뜁니다.
 
 ```json
 "bizinfo": {
   "enabled": true,
-  "crtfcKey": "발급받은_기업마당_API키",
   "page_unit": 200
 }
 ```
@@ -74,10 +88,9 @@ K-Startup은 API 키를 쓰지 않고 모집중 웹페이지 HTML을 직접 읽�
 
 ## 업데이트(재수집)
 
-웹 화면의 `업데이트` 버튼을 누르거나 PowerShell에서 실행합니다.
+웹 화면의 `업데이트` 버튼을 누르거나 저장소 폴더에서 PowerShell로 실행합니다.
 
 ```powershell
-cd C:\Users\USER\Desktop\gongo_fresh_v3
 powershell -ExecutionPolicy Bypass -File .\run-collect.ps1
 ```
 
@@ -101,21 +114,22 @@ Invoke-RestMethod http://127.0.0.1:8080/api/health
 Invoke-RestMethod -Method Post http://127.0.0.1:8080/api/recollect | ConvertTo-Json -Depth 10
 ```
 
-## v3에서 고친 문제
+## 핵심 설계 결정
 
-1. `gongo_feed.json` 경로 문제 제거: 이제 SQLite 하나만 사용합니다.
-2. `collect.py` subprocess 인코딩 문제 제거: 서버가 collector를 직접 import해서 실행합니다.
-3. 일부 소스 실패가 전체 실패로 처리되는 문제 제거.
+1. 파일 기반 캐시(`gongo_feed.json`) 대신 SQLite 하나만 사용합니다.
+2. `collect.py`를 subprocess로 띄우지 않고, 서버가 collector를 직접 import해서 실행합니다 (인코딩 문제 회피).
+3. 소스 하나가 실패해도 전체 수집이 죽지 않습니다 — 실패한 소스만 건너뜁니다.
 4. API 키가 없을 때도 앱은 뜨고, 샘플 데이터로 확인 가능합니다.
-5. 관심 공고는 localStorage가 아니라 SQLite에 저장됩니다.
+5. 관심 공고/AI 판정 결과는 localStorage가 아니라 계정별로 SQLite에 저장됩니다.
 6. CSV 내보내기를 기본 제공합니다.
 
 ## 주의
 
 - `config.json`은 실제 API 키가 들어갈 수 있으므로 GitHub에 올리지 마세요 (`.gitignore`에 이미 포함).
 - NRF/KDDF 같은 게시판 수집은 robots.txt 또는 게시판 구조에 따라 막힐 수 있습니다.
-- 서울바이오허브/KHIDI는 우선 기업마당 API 결과를 키워드로 라우팅하는 방식이 안정적입니다.
-- 사용자 비밀번호는 해시로만 저장되고, 사용자가 등록한 Claude API 키는 `APP_SECRET_KEY`로 암호화되어 저장됩니다. 화면에 다시 표시되지 않습니다.
+- 서울바이오허브/KHIDI는 각자 전용 파서(`biohub_direct`/`khidi_direct`)로 직접 수집하는 것이 기본 방식입니다. 기업마당 API 결과를 키워드로 라우팅하는 것은 보조 수단으로, 전용 파서가 놓친 공고를 보완하는 용도입니다.
+- 기업마당은 별도 공용 키를 두지 않습니다 — 등록된 사용자 중 "회사 정보"에서 본인의 기업마당 API 키를 저장한 사람이 있어야 수집됩니다. 화면에서 기업마당 공고를 보려면 조회하는 사용자 본인도 키를 등록해야 합니다.
+- 사용자 비밀번호는 해시로만 저장되고, 사용자가 등록한 Claude API 키/기업마당 API 키는 `APP_SECRET_KEY`로 암호화되어 저장됩니다. 화면에 다시 표시되지 않습니다.
 
 ## 배포 (Railway / Render 등 관리형 플랫폼)
 
@@ -134,8 +148,7 @@ Invoke-RestMethod -Method Post http://127.0.0.1:8080/api/recollect | ConvertTo-J
      python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
      ```
      이 값을 잃어버리면 이미 저장된 사용자들의 API 키를 복호화할 수 없게 되니, 별도로 안전하게 보관하세요.
-   - `BIZINFO_API_KEY` — 기업마당 API 키를 쓰려면 설정 (선택).
-   - `G2B_API_KEY` — 나라장터(조달청) 서비스키를 쓰려면 설정 (선택).
+   - `G2B_API_KEY` — 나라장터(조달청) 서비스키를 쓰려면 설정 (선택). 기업마당은 환경변수를 쓰지 않고, 배포 후 관리자 계정으로 로그인해 "회사 정보"에서 키를 등록하세요.
    - `ADMIN_EMAILS` — 관리자 권한을 자동으로 부여할 이메일 목록, 쉼표로 구분 (선택). 예: `me@example.com,teammate@example.com`
 5. **퍼시스턴트 볼륨**을 `data/` 경로에 연결하세요. SQLite 파일(`data/gongo.sqlite`)이 재배포/재시작 후에도 유지되려면 반드시 필요합니다.
 6. 시작 커맨드는 `Procfile`에 정의되어 있습니다: `python server.py --host 0.0.0.0 --port $PORT` — 대부분의 플랫폼이 `Procfile`을 자동 인식합니다.
@@ -158,7 +171,7 @@ HTML 텍스트 안에 반복되는 카드 구조에서 다음 값을 추출합�
 - 등록일자, 시작일자, 마감일자
 - 조회/상태가 섞인 원문 row text
 
-K-Startup 사이트 구조가 바뀌면 `config.json`에서 `list_url`을 수정하거나, `collector.py`의 `parse_kstartup_html_items()` 파서를 조정하면 됩니다. 현재는 1페이지의 모집중 목록을 안정적으로 가져오는 구조입니다.
+K-Startup 사이트 구조가 바뀌면 `config.json`에서 `list_url`을 수정하거나, `collector.py`의 `parse_kstartup_html_items()` 파서를 조정하면 됩니다. `max_pages`만큼 페이지네이션도 따라가며 가져옵니다.
 
 ## 서울바이오허브 직접 수집기 추가 버전
 
@@ -173,29 +186,56 @@ K-Startup 사이트 구조가 바뀌면 `config.json`에서 `list_url`을 수정
 
 ### 동작 방식
 
-1. `list_urls`에서 `supportManageView.do` 상세 링크를 먼저 찾습니다.
-2. 목록 페이지가 막히거나 JS 기반이면 `seed_urls`를 보조로 사용합니다.
-3. `seq_scan_enabled`가 true이면 `seq_start`~`seq_end` 범위의 최근 상세 페이지를 스캔합니다.
+1. 목록 페이지(`supportManageListPage.do`)를 POST로 조회해 실제 존재하는 `(seq, gubun)` 쌍을 전부 가져옵니다. 값을 추측하지 않고 사이트가 알려주는 그대로 쓰므로, 존재하지 않는 페이지를 헛도는 일이 없습니다.
+2. 위 방식이 실패하면(사이트 구조 변경 등) `seed_urls`로 보완합니다.
+
+(예전에는 `seq` 범위를 추측 스캔하는 3단계가 더 있었지만, 1번이 실제 목록을 정확히 가져오게 되면서 유령 페이지만 만들어내는 손해였기 때문에 제거했습니다.)
 
 서울바이오허브 사이트 구조가 바뀌면 `config.json`에서 아래 값만 조정하면 됩니다.
 
 ```json
 "biohub_direct": {
   "enabled": true,
-  "seq_start": 700,
-  "seq_end": 830,
-  "gubun_list": ["14", "08", "09", "04", "03", "12"],
-  "max_detail_pages": 500
+  "seed_urls": [
+    "https://www.seoulbiohub.kr/front/supportManageReq/supportManageView.do?gubun=08&seq=763"
+  ],
+  "max_detail_pages": 500,
+  "detail_delay_sec": 0.03
 }
 ```
 
-수집이 너무 오래 걸리면 `seq_scan_enabled`를 `false`로 바꾸거나 `seq_start`~`seq_end` 범위를 좁히세요.
+`seed_urls`는 목록 조회가 완전히 실패했을 때만 쓰이는 보조 수단입니다.
 
 ### 실행
 
+저장소 폴더에서:
+
 ```powershell
-cd C:\Users\USER\Desktop\gongo_v3
 python .\collector.py
 ```
 
-서버가 켜져 있으면 관리자 화면의 **수동 재수집** 버튼으로도 동일하게 실행됩니다.
+서버가 켜져 있으면 관리자 화면의 **수동 재수집** 버튼(또는 웹 화면의 `업데이트` 버튼)으로도 동일하게 실행됩니다.
+
+## KHIDI(보건산업진흥원) 직접 수집기
+
+`boards.khidi_direct`도 게시판 크롤러가 아니라 KHIDI의 공개 openAPI 피드를 직접 호출하는 전용 파서입니다.
+
+```text
+https://www.khidi.or.kr/kps/openAPI/requestxml
+```
+
+이 피드는 공고 제목과 등록일만 내려주고 본문 텍스트는 주지 않으므로, `parse_title_dates()`가 제목
+문자열 안에 섞여 있는 신청기간 표현(예: `(~7/31(목) 18:00까지)`, `2026.7.1~7.31`)을 정규식으로
+해석해서 시작일/마감일을 추출합니다. 마감일만 뽑히고 시작일을 못 찾은 경우, 오늘 날짜부터
+접수 중인 것으로 간주합니다.
+
+```json
+"khidi_direct": {
+  "enabled": true,
+  "menu_id": "MENU01108",
+  "row_cnt": 200
+}
+```
+
+KHIDI가 API 응답 구조나 `menuId`를 바꾸면 `config.json`의 `menu_id`를 조정하거나, `collector.py`의
+`collect_khidi_direct()`/`parse_title_dates()`를 수정하면 됩니다.
