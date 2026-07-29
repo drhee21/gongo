@@ -364,6 +364,7 @@ function renderAuthUI(){
     companyLoggedInArea?.classList.add('hidden');
   }
   updateApiKeyStatus();
+  fillLlmPreference();
   const overridesPanel = $('#adminOverridesPanel');
   if(currentUserState?.is_admin){
     overridesPanel?.classList.remove('hidden');
@@ -403,10 +404,32 @@ async function loadSourceOverrides(){
 }
 
 function updateApiKeyStatus(){
-  const el = $('#apiKeyStatus');
-  if(el) el.textContent = currentUserState?.has_api_key ? 'API 키가 등록되어 있습니다.' : '등록된 API 키가 없습니다.';
   const bizEl = $('#bizinfoKeyStatus');
   if(bizEl) bizEl.textContent = currentUserState?.has_bizinfo_key ? '기업마당 API 키가 등록되어 있습니다.' : '등록된 기업마당 API 키가 없습니다 — 기업마당 공고가 목록에서 보이지 않습니다.';
+  const el = $('#llmPreferenceStatus');
+  if(el) el.textContent = currentUserState?.has_llm_key ? 'API 키가 등록되어 있습니다.' : '등록된 API 키가 없습니다.';
+}
+
+let llmModels = [];
+
+async function loadLlmModels(){
+  if(llmModels.length) return llmModels;
+  try{
+    const res = await api('/api/llm-models');
+    llmModels = res.items || [];
+    const sel = $('#llmModelSelect');
+    if(sel) sel.innerHTML = llmModels.map(m => `<option value="${esc(m.id)}">${esc(m.label)}</option>`).join('');
+  }catch(err){ /* 목록을 못 가져와도 나머지 화면은 계속 쓸 수 있어야 한다 */ }
+  return llmModels;
+}
+
+async function fillLlmPreference(){
+  await loadLlmModels();
+  const f = $('#llmPreferenceForm');
+  if(!f) return;
+  const pref = currentUserState?.llm_preference || {};
+  if(f.elements.model_id && pref.model_id) f.elements.model_id.value = pref.model_id;
+  updateApiKeyStatus();
 }
 
 async function recollect(){
@@ -508,26 +531,34 @@ $('#btnAiFit')?.addEventListener('click', async ()=>{
   }
 });
 
-$('#apiKeyForm')?.addEventListener('submit', async e=>{
+$('#llmPreferenceForm')?.addEventListener('submit', async e=>{
   e.preventDefault();
   const form = e.currentTarget;
   const data = Object.fromEntries(new FormData(form).entries());
-  if(!data.api_key){ toast('입력한 내용이 없어 변경하지 않았습니다'); return; }
   try{
-    const res = await api('/api/me/api-key', {method:'POST', body:JSON.stringify({api_key: data.api_key})});
-    if(currentUserState) currentUserState.has_api_key = res.has_api_key;
-    updateApiKeyStatus();
-    form.reset();
-    toast('API 키 저장 완료', 'success');
+    const prefRes = await api('/api/me/llm-preference', {method:'POST', body:JSON.stringify({model_id: data.model_id})});
+    if(data.key){
+      const keyRes = await api('/api/me/llm-key', {method:'POST', body:JSON.stringify({model_id: data.model_id, key: data.key})});
+      prefRes.has_llm_key = keyRes.has_llm_key;
+    }
+    if(currentUserState){
+      currentUserState.llm_preference = prefRes.llm_preference;
+      currentUserState.has_llm_key = prefRes.has_llm_key;
+    }
+    form.elements.key.value = '';
+    fillLlmPreference();
+    toast('AI 모델 설정 저장 완료', 'success');
   }catch(err){ toast(err.message, 'error'); }
 });
-$('#btnDeleteApiKey')?.addEventListener('click', async ()=>{
-  if(!confirm('등록된 Claude API 키를 삭제할까요?')) return;
+$('#btnDeleteLlmKey')?.addEventListener('click', async ()=>{
+  const modelId = $('#llmModelSelect')?.value;
+  if(!modelId) return;
+  if(!confirm('등록된 API 키를 삭제할까요?')) return;
   try{
-    const res = await api('/api/me/api-key', {method:'POST', body:JSON.stringify({api_key: ''})});
-    if(currentUserState) currentUserState.has_api_key = res.has_api_key;
+    const res = await api('/api/me/llm-key', {method:'POST', body:JSON.stringify({model_id: modelId, key: ''})});
+    if(currentUserState) currentUserState.has_llm_key = res.has_llm_key;
     updateApiKeyStatus();
-    $('#apiKeyForm')?.reset();
+    $('#llmPreferenceForm')?.reset();
     toast('API 키 삭제 완료', 'success');
   }catch(err){ toast(err.message, 'error'); }
 });
@@ -557,6 +588,7 @@ $('#btnDeleteBizinfoKey')?.addEventListener('click', async ()=>{
     toast('기업마당 API 키 삭제 완료', 'success');
   }catch(err){ toast(err.message, 'error'); }
 });
+
 
 async function loadCompanyDocs(){
   const el = $('#companyDocsList');

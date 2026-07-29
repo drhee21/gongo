@@ -136,21 +136,24 @@
           </div>
         </form>
         <div class="panel">
-          <h2>Claude API 키</h2>
-          <p>AI 맞춤 분석은 본인의 Claude API 키로 실행됩니다. 키는 암호화되어 저장되고 화면에는 다시 표시되지 않습니다.</p>
-          <form id="apiKeyForm" class="form-grid">
-            <label class="wide">API 키
+          <h2>AI 맞춤 분석 모델</h2>
+          <p>AI 맞춤 분석에 사용할 모델과 API 키를 설정합니다. 키는 암호화되어 저장되고 화면에는 다시 표시되지 않습니다.</p>
+          <form id="llmPreferenceForm" class="form-grid">
+            <label class="wide">모델
+              <select name="model_id" id="llmModelSelect"></select>
+            </label>
+            <label class="wide" id="llmKeyLabel">LLM API 키
               <div class="input-eye-wrap">
-                <input type="password" name="api_key" id="apiKeyInput" placeholder="sk-ant-... (비워두면 변경 없음)" />
-                <button type="button" class="eye-toggle" data-eye-toggle="apiKeyInput" aria-label="API 키 표시/숨기기"></button>
+                <input type="password" name="key" id="llmKeyInput" placeholder="비워두면 변경 없음" />
+                <button type="button" class="eye-toggle" data-eye-toggle="llmKeyInput" aria-label="API 키 표시/숨기기"></button>
               </div>
             </label>
             <div class="wide form-actions">
               <button class="primary" type="submit">저장</button>
-              <button class="button" type="button" id="btnDeleteApiKey">키 삭제</button>
+              <button class="button" type="button" id="btnDeleteLlmKey">키 삭제</button>
             </div>
           </form>
-          <p class="meta" id="apiKeyStatus"></p>
+          <p class="meta" id="llmPreferenceStatus"></p>
         </div>
         <div class="panel">
           <h2>기업마당 API 키</h2>
