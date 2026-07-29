@@ -28,6 +28,7 @@ from bs4 import BeautifulSoup
 
 import auth
 import database
+import llm
 
 ROOT = Path(__file__).resolve().parent
 CONFIG_PATH = ROOT / "config.json"
@@ -805,6 +806,95 @@ def collect_kddf(bcfg: Dict[str, Any], common: Dict[str, Any]) -> List[Dict[str,
 # 가져올 수 있고, 그 제목에 박힌 마감일 표기(parse_title_dates)로 신청기간을 추정한다.
 KHIDI_FEED_URL = "https://www.khidi.or.kr/kps/openAPI/requestxml"
 
+KHIDI_DEADLINE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "results": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string"},
+                    "end_date": {"type": ["string", "null"], "description": "YYYY-MM-DD, 본문에서 신청 마감일을 찾지 못했으면 null"},
+                },
+                "required": ["id", "end_date"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["results"],
+    "additionalProperties": False,
+}
+
+KHIDI_DEADLINE_SYSTEM_PROMPT = (
+    "너는 한국 보건산업진흥원(KHIDI) 공고 본문을 읽고 '신청 마감일'을 찾는 어시스턴트다.\n"
+    "여러 날짜가 언급되어도 실제로 사업 신청/접수가 마감되는 날짜만 골라라 (공고일, 심사일, "
+    "발표일, 사업 수행기간의 종료일 등은 마감일이 아니다). 상시/수시 모집이거나 본문에 명확한 "
+    "마감일이 없으면 end_date를 null로 반환해라. 반드시 YYYY-MM-DD 형식으로, 전달받은 공고 "
+    "전부에 대해 결과를 반환해라."
+)
+
+KHIDI_DEADLINE_CHUNK_SIZE = 20
+KHIDI_DEADLINE_MIN_CONTENT_LEN = 30
+
+
+def _strip_html_to_text(raw: str) -> str:
+    if not raw:
+        return ""
+    return clean(BeautifulSoup(raw, "html.parser").get_text(" ", strip=True))
+
+
+def enrich_khidi_deadlines_with_ai(items: List[Dict[str, Any]], contents: Dict[str, str]) -> None:
+    """제목에서 마감일을 못 찾은 KHIDI 공고만, 본문 텍스트로 AI에게 마감일을 물어본다.
+
+    비용을 줄이기 위해 제목으로 이미 마감일을 찾은 공고는 애초에 대상에서 제외한다
+    (이 함수를 호출하는 쪽에서 items를 그렇게 필터링해서 넘긴다). 결과가 유효한
+    YYYY-MM-DD 형식이 아니면 무시하고, 원래대로 '날짜 미상' 처리를 유지한다.
+    items는 in-place로 갱신된다.
+    """
+    candidates = [
+        it for it in items
+        if not it.get("end") and not it.get("rolling_confirmed")
+        and len(contents.get(it["id"], "")) >= KHIDI_DEADLINE_MIN_CONTENT_LEN
+    ]
+    if not candidates:
+        return
+
+    model_id = (database.get_any_llm_preference() or {}).get("model_id") or llm.DEFAULT_MODEL_ID
+    key_enc = database.get_any_llm_key_enc(llm.provider_of(model_id))
+    if not key_enc:
+        return  # AI 키가 없으면 기존 '날짜 미상' 처리를 그대로 둔다 — 조용히 건너뛴다.
+    api_key = auth.decrypt_secret(key_enc)
+
+    by_id = {it["id"]: it for it in candidates}
+    for i in range(0, len(candidates), KHIDI_DEADLINE_CHUNK_SIZE):
+        batch = candidates[i:i + KHIDI_DEADLINE_CHUNK_SIZE]
+        briefs = [
+            {"id": it["id"], "title": it["title"], "content": contents[it["id"]]}
+            for it in batch
+        ]
+        try:
+            data = llm.structured_call(
+                model_id, api_key,
+                KHIDI_DEADLINE_SYSTEM_PROMPT,
+                json.dumps(briefs, ensure_ascii=False),
+                KHIDI_DEADLINE_SCHEMA,
+                max_tokens=4000,
+            )
+        except Exception:
+            continue  # 이 배치만 실패 — 나머지 배치는 계속 시도하고, 실패분은 기존 처리 유지.
+
+        for r in data.get("results", []):
+            it = by_id.get(r.get("id"))
+            end_date = r.get("end_date")
+            if not it or not end_date:
+                continue
+            m = re.match(r"^(\d{4})-(\d{2})-(\d{2})$", end_date)
+            if not m or not valid_ymd(*map(int, m.groups())):
+                continue
+            it["end"] = end_date
+            it["dates_unknown"] = False
+
 
 def collect_khidi_direct(bcfg: Dict[str, Any], common: Dict[str, Any]) -> List[Dict[str, Any]]:
     if not bcfg.get("enabled", False):
@@ -829,6 +919,7 @@ def collect_khidi_direct(bcfg: Dict[str, Any], common: Dict[str, Any]) -> List[D
     category = bcfg.get("category") or "바이오·헬스"
 
     out: List[Dict[str, Any]] = []
+    contents: Dict[str, str] = {}
     seen = set()
     for row in root.findall("row"):
         # 이 API는 XML 엔티티를 이중으로 인코딩해서 내려준다(원문의 "&amp;apos;"가
@@ -858,12 +949,15 @@ def collect_khidi_direct(bcfg: Dict[str, Any], common: Dict[str, Any]) -> List[D
         if not start:
             item["start"] = None
         mark_dates_unknown_if_needed(item, title, start_was_known=bool(start))
+        if not end:
+            contents[item["id"]] = _strip_html_to_text(html.unescape(row.findtext("content") or ""))
         out.append(item)
         if len(out) >= max_items:
             break
 
     if not out:
         raise RuntimeError("0건 파싱: khidi 공고 API 구조 확인 필요")
+    enrich_khidi_deadlines_with_ai(out, contents)
     time.sleep(float(common.get("request_delay_sec", 0.8)))
     return out
 
@@ -1328,6 +1422,52 @@ def merge_duplicate_notices(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]
     return merged
 
 
+def recover_source_via_recipe(source_id: str, list_url: str, common: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
+    """flag_source_anomalies()가 이 소스를 '갑자기 0건/급감'으로 표시했을 때 예비로 시도한다.
+
+    먼저 저장된 레시피가 있으면 그대로 재실행해보고(레시피가 여전히 맞으면 LLM
+    호출 없이 바로 성공), 없거나 그것도 실패하면 discover_recipe_agentic()으로
+    새로 발견을 시도한다 — fetch_url 도구로 외부 JS 파일을 직접 열어보거나 후보
+    URL을 실제로 검증해본 뒤 레시피를 제출하는 에이전틱 버전이다. 정적 페이지
+    스냅샷만 보는 한 번의 호출보다 비용이 더 들지만(회당 여러 번의 LLM 호출),
+    이 함수는 소스가 깨졌을 때만 드물게 실행되므로 정확도를 우선한다. 둘 다
+    실패하면 None을 반환해 기존 '이상 감지' 표시를 그대로 둔다 — 이 함수가
+    예외를 던지면 안 된다(collect_all()의 정상 흐름을 깨면 안 되므로 내부에서
+    전부 처리한다).
+    """
+    import recipe_engine
+
+    model_id = (database.get_any_llm_preference() or {}).get("model_id") or llm.DEFAULT_MODEL_ID
+    key_enc = database.get_any_llm_key_enc(llm.provider_of(model_id))
+    api_key = auth.decrypt_secret(key_enc) if key_enc else None
+
+    stored = database.get_source_recipe(source_id)
+    if stored and api_key:
+        try:
+            return recipe_engine.run_recipe(source_id, stored["recipe"], common, model_id=model_id, api_key=api_key)
+        except Exception:
+            pass  # 저장된 레시피가 더 이상 안 맞을 수 있다 — 아래에서 새로 발견을 시도한다.
+
+    if not api_key:
+        return None
+    try:
+        r = SESSION.get(list_url, timeout=common.get("timeout_sec", 20))
+        r.raise_for_status()
+        if not r.encoding or r.encoding.lower() == "iso-8859-1":
+            r.encoding = r.apparent_encoding
+        sample = recipe_engine._strip_boilerplate_html(r.text)
+        recipe = recipe_engine.discover_recipe_agentic(
+            source_id, sample, list_url, "html", model_id, api_key, common
+        )
+        items = recipe_engine.run_recipe(source_id, recipe, common, model_id=model_id, api_key=api_key)
+        if not items:
+            return None
+        database.set_source_recipe(source_id, recipe, verified_ok=True)
+        return items
+    except Exception:
+        return None
+
+
 def load_sample_items() -> List[Dict[str, Any]]:
     if not SAMPLE_PATH.exists():
         return []
@@ -1389,10 +1529,13 @@ def collect_all(write_db: bool = True) -> CollectRun:
         run.record("kstartup", [], "비활성화")
 
     # Direct boards.
+    board_list_urls: Dict[str, str] = {}
     for sid, raw_board_cfg in (cfg.get("boards") or {}).items():
         if sid.startswith("_"):
             continue
         board_cfg = _apply_source_override(raw_board_cfg, sid, overrides)
+        if clean(board_cfg.get("list_url")):
+            board_list_urls[sid] = clean(board_cfg.get("list_url"))
         if not board_cfg.get("enabled", False):
             run.record(sid, [], "비활성화")
             continue
@@ -1427,8 +1570,25 @@ def collect_all(write_db: bool = True) -> CollectRun:
         used_sample = True
 
     if write_db:
-        database.upsert_notices(run.items, prune=not used_sample)
         run.sources = database.flag_source_anomalies(run.sources)
+        recovered_any = False
+        for sid, entry in run.sources.items():
+            if not entry.get("anomaly") or sid not in board_list_urls:
+                continue
+            recovered = recover_source_via_recipe(sid, board_list_urls[sid], common)
+            if not recovered:
+                continue
+            recovered = recovered[:cap]
+            run.items.extend(recovered)
+            entry["n"] = len(recovered)
+            entry["state"] = "레시피로 복구됨"
+            entry["anomaly"] = False
+            entry["anomaly_note"] = f"기존 수집이 실패해 레시피 기반으로 자동 복구되었습니다 ({len(recovered)}건)."
+            recovered_any = True
+        if recovered_any:
+            run.items = merge_duplicate_notices(run.items)
+
+        database.upsert_notices(run.items, prune=not used_sample)
         database.record_source_history(run.sources)
         database.replace_source_status(run.sources)
     return run
