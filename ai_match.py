@@ -1,11 +1,12 @@
 # -*- coding: utf-8 -*-
-"""Claude API를 이용해 공고와 회사 정보를 비교, 적합도를 판정한다."""
+"""LLM을 이용해 공고와 회사 정보를 비교, 적합도를 판정한다."""
 from __future__ import annotations
 
 import json
 from typing import Any, Dict, List
 
-MODEL = "claude-opus-4-8"
+import llm
+
 CHUNK_SIZE = 40
 
 FIT_SCHEMA = {
@@ -112,22 +113,18 @@ def judge_company_fit(
     company: Dict[str, Any],
     api_key: str,
     documents: List[Dict[str, Any]] | None = None,
+    model_id: str = llm.DEFAULT_MODEL_ID,
 ) -> Dict[str, Dict[str, str]]:
-    """공고 목록과 회사 정보를 Claude API로 비교해 각 공고의 적합도를 판정한다.
+    """공고 목록과 회사 정보를 LLM으로 비교해 각 공고의 적합도를 판정한다.
 
-    `api_key`는 호출자(서버)가 요청한 사용자 본인의 Claude API 키를 넘겨줘야 한다 —
+    `api_key`는 호출자(서버)가 요청한 사용자 본인의 API 키를 넘겨줘야 한다 —
     이 함수는 더 이상 config.json/환경변수에서 키를 찾지 않는다.
     `documents`는 사용자가 업로드한 회사 문서(파일명+추출된 텍스트) 목록으로,
     간단한 폼 필드보다 더 풍부한 판단 근거를 제공한다.
+    `model_id`는 사용자가 '회사 정보'에서 선택한 모델이다 (llm.MODEL_CATALOG 참고).
 
     반환값: {notice_id: {"fit": "fit"|"unfit"|"unsure", "reason": str}}
     """
-    import anthropic
-
-    if not api_key:
-        raise RuntimeError("Claude API 키가 없습니다. '회사 정보'에서 본인의 API 키를 먼저 등록해주세요.")
-
-    client = anthropic.Anthropic(api_key=api_key)
     company_text = _company_text(company)
     documents_text = _documents_text(documents)
     profile_block = company_text
@@ -138,7 +135,8 @@ def judge_company_fit(
         briefs = [_notice_brief(n) for n in batch]
         # 회사 정보/문서 블록은 청크마다 동일하게 반복되므로 별도 content block으로
         # 분리해 cache_control을 붙인다 — 같은 실행 안의 반복 호출이 캐시를 재사용해
-        # 문서 텍스트만큼 토큰 비용이 배로 늘어나는 걸 막는다.
+        # 문서 텍스트만큼 토큰 비용이 배로 늘어나는 걸 막는다. (Anthropic 외 공급자는
+        # 이 필드를 무시하고 텍스트만 사용한다.)
         user_content = [
             {
                 "type": "text",
@@ -151,37 +149,15 @@ def judge_company_fit(
             },
         ]
 
-        try:
-            with client.messages.stream(
-                model=MODEL,
-                max_tokens=16000,
-                thinking={"type": "adaptive"},
-                system=SYSTEM_PROMPT,
-                output_config={"format": {"type": "json_schema", "schema": FIT_SCHEMA}},
-                messages=[{"role": "user", "content": user_content}],
-            ) as stream:
-                response = stream.get_final_message()
-        except anthropic.AuthenticationError:
-            raise RuntimeError("등록된 Claude API 키가 유효하지 않습니다. '회사 정보'에서 키를 다시 확인해주세요.")
-        except anthropic.PermissionDeniedError:
-            raise RuntimeError("이 Claude API 키로는 해당 모델을 사용할 권한이 없습니다.")
-        except anthropic.RateLimitError:
-            raise RuntimeError("Claude API 요청 한도를 초과했습니다. 잠시 후 다시 시도해주세요.")
-        except anthropic.BadRequestError as e:
-            msg = str(e)
-            if "credit balance is too low" in msg:
-                raise RuntimeError(
-                    "Claude API 크레딧 잔액이 부족합니다. "
-                    "console.anthropic.com의 Plans & Billing에서 결제 수단을 등록하거나 크레딧을 충전한 뒤 다시 시도해주세요."
-                )
-            raise RuntimeError(f"Claude API 요청이 거부되었습니다: {msg}")
-        except anthropic.APIStatusError as e:
-            raise RuntimeError(f"Claude API 오류가 발생했습니다: {e}")
-
-        text = next((b.text for b in response.content if b.type == "text"), None)
-        if not text:
-            return {}
-        data = json.loads(text)
+        data = llm.structured_call(
+            model_id,
+            api_key,
+            SYSTEM_PROMPT,
+            user_content,
+            FIT_SCHEMA,
+            max_tokens=16000,
+            thinking={"type": "adaptive"},
+        )
         result: Dict[str, Dict[str, str]] = {}
         for r in data.get("results", []):
             nid = r.get("id")

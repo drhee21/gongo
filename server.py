@@ -21,6 +21,7 @@ import auth
 import ai_match
 import collector
 import database
+import llm
 import uploads
 
 ROOT = Path(__file__).resolve().parent
@@ -174,12 +175,24 @@ def clear_session_cookie_header() -> str:
     return f"{SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0"
 
 
+def resolve_llm_key_enc(user: Dict[str, Any], provider: str) -> Optional[str]:
+    key_enc = database.get_llm_provider_key(user["id"], provider)
+    if key_enc:
+        return key_enc
+    if provider == "anthropic":
+        return user.get("anthropic_api_key_enc")  # 신규 테이블 이전의 레거시 키
+    return None
+
+
 def user_public(user: Dict[str, Any]) -> Dict[str, Any]:
+    pref = database.get_user_setting(user["id"], "llm_preference", {}) or {}
+    model_id = pref.get("model_id") or llm.DEFAULT_MODEL_ID
     return {
         "email": user["email"],
-        "has_api_key": bool(user.get("anthropic_api_key_enc")),
         "has_bizinfo_key": bool(user.get("bizinfo_api_key_enc")),
         "is_admin": bool(user.get("is_admin")),
+        "llm_preference": {"model_id": model_id},
+        "has_llm_key": bool(resolve_llm_key_enc(user, llm.provider_of(model_id))),
     }
 
 
@@ -231,6 +244,9 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/auth/me":
                 user = current_user(self)
                 self.send_json({"ok": True, "user": user_public(user) if user else None})
+                return
+            if path == "/api/llm-models":
+                self.send_json({"ok": True, "items": llm.MODEL_CATALOG})
                 return
             if path == "/api/notices":
                 user = current_user(self)
@@ -348,23 +364,6 @@ class Handler(BaseHTTPRequestHandler):
                     database.delete_session(token)
                 self.send_json({"ok": True}, set_cookie=clear_session_cookie_header())
                 return
-            if path == "/api/me/api-key":
-                user = current_user(self)
-                if not user:
-                    self.send_json({"ok": False, "error": "로그인이 필요합니다"}, status=401)
-                    return
-                data = self.read_json()
-                raw_key = str(data.get("api_key") or "").strip()
-                if not raw_key:
-                    database.set_user_api_key(user["id"], None)
-                    self.send_json({"ok": True, "has_api_key": False})
-                    return
-                if not raw_key.startswith("sk-ant-"):
-                    self.send_json({"ok": False, "error": "Claude API 키 형식이 아닙니다 ('sk-ant-'로 시작해야 합니다)"}, status=400)
-                    return
-                database.set_user_api_key(user["id"], auth.encrypt_secret(raw_key))
-                self.send_json({"ok": True, "has_api_key": True})
-                return
             if path == "/api/me/bizinfo-key":
                 user = current_user(self)
                 if not user:
@@ -378,6 +377,42 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 database.set_user_bizinfo_key(user["id"], auth.encrypt_secret(raw_key))
                 self.send_json({"ok": True, "has_bizinfo_key": True})
+                return
+            if path == "/api/me/llm-key":
+                user = current_user(self)
+                if not user:
+                    self.send_json({"ok": False, "error": "로그인이 필요합니다"}, status=401)
+                    return
+                data = self.read_json()
+                model_id = str(data.get("model_id") or "").strip()
+                if model_id not in llm.MODEL_BY_ID:
+                    self.send_json({"ok": False, "error": "지원하지 않는 모델입니다"}, status=400)
+                    return
+                provider = llm.provider_of(model_id)
+                raw_key = str(data.get("key") or "").strip()
+                if not raw_key:
+                    database.set_llm_provider_key(user["id"], provider, None)
+                    self.send_json({"ok": True, "has_llm_key": False})
+                    return
+                database.set_llm_provider_key(user["id"], provider, auth.encrypt_secret(raw_key))
+                self.send_json({"ok": True, "has_llm_key": True})
+                return
+            if path == "/api/me/llm-preference":
+                user = current_user(self)
+                if not user:
+                    self.send_json({"ok": False, "error": "로그인이 필요합니다"}, status=401)
+                    return
+                data = self.read_json()
+                model_id = str(data.get("model_id") or "").strip()
+                if model_id not in llm.MODEL_BY_ID:
+                    self.send_json({"ok": False, "error": "지원하지 않는 모델입니다"}, status=400)
+                    return
+                database.set_user_setting(user["id"], "llm_preference", {"model_id": model_id})
+                self.send_json({
+                    "ok": True,
+                    "llm_preference": {"model_id": model_id},
+                    "has_llm_key": bool(resolve_llm_key_enc(user, llm.provider_of(model_id))),
+                })
                 return
             if path == "/api/recollect":
                 user = current_user(self)
@@ -474,17 +509,21 @@ class Handler(BaseHTTPRequestHandler):
                 if not user:
                     self.send_json({"ok": False, "error": "로그인이 필요합니다"}, status=401)
                     return
-                enc_key = user.get("anthropic_api_key_enc")
+                pref = database.get_user_setting(user["id"], "llm_preference", {}) or {}
+                model_id = pref.get("model_id") or llm.DEFAULT_MODEL_ID
+                enc_key = resolve_llm_key_enc(user, llm.provider_of(model_id))
                 if not enc_key:
                     self.send_json(
-                        {"ok": False, "error": "먼저 '회사 정보'에서 본인의 Claude API 키를 등록해주세요."}, status=400
+                        {"ok": False, "error": "먼저 '회사 정보'에서 본인의 API 키를 등록해주세요."}, status=400
                     )
                     return
                 api_key = auth.decrypt_secret(enc_key)
                 company = database.get_user_setting(user["id"], "company", {})
                 documents = database.list_company_documents(user["id"])
                 notices = database.list_notices()
-                results = ai_match.judge_company_fit(notices, company, api_key, documents=documents)
+                results = ai_match.judge_company_fit(
+                    notices, company, api_key, documents=documents, model_id=model_id
+                )
                 database.save_ai_fit(user["id"], results, company_profile_hash(company))
                 counts: Dict[str, int] = {}
                 for r in results.values():
