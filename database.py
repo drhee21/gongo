@@ -169,6 +169,22 @@ def init_db() -> None:
                 FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
             );
 
+            CREATE TABLE IF NOT EXISTS llm_provider_keys (
+                user_id TEXT NOT NULL,
+                provider TEXT NOT NULL,
+                key_enc TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (user_id, provider),
+                FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS source_recipes (
+                source_id TEXT PRIMARY KEY,
+                recipe_json TEXT NOT NULL,
+                discovered_at TEXT NOT NULL,
+                verified_ok INTEGER DEFAULT 0
+            );
+
             CREATE INDEX IF NOT EXISTS idx_notices_source ON notices(source);
             CREATE INDEX IF NOT EXISTS idx_notices_end ON notices(end_date);
             CREATE INDEX IF NOT EXISTS idx_notices_category ON notices(category);
@@ -699,12 +715,6 @@ def get_user_by_id(user_id: str) -> Optional[Dict[str, Any]]:
     return dict(row) if row else None
 
 
-def set_user_api_key(user_id: str, encrypted_key: Optional[str]) -> None:
-    init_db()
-    with connect() as con:
-        con.execute("UPDATE users SET anthropic_api_key_enc=? WHERE id=?", (encrypted_key, user_id))
-
-
 def set_user_admin(user_id: str, is_admin: bool) -> None:
     init_db()
     with connect() as con:
@@ -733,6 +743,129 @@ def get_any_bizinfo_key_enc() -> Optional[str]:
             "ORDER BY is_admin DESC, created_at ASC LIMIT 1"
         ).fetchone()
     return row["bizinfo_api_key_enc"] if row else None
+
+
+# ──────────────────────────── LLM 공급자 키 ────────────────────────────
+
+def set_llm_provider_key(user_id: str, provider: str, encrypted_key: Optional[str]) -> None:
+    init_db()
+    with connect() as con:
+        if encrypted_key is None:
+            con.execute(
+                "DELETE FROM llm_provider_keys WHERE user_id=? AND provider=?", (user_id, provider)
+            )
+        else:
+            con.execute(
+                """
+                INSERT INTO llm_provider_keys(user_id, provider, key_enc, updated_at) VALUES (?, ?, ?, ?)
+                ON CONFLICT(user_id, provider) DO UPDATE SET key_enc=excluded.key_enc, updated_at=excluded.updated_at
+                """,
+                (user_id, provider, encrypted_key, now_iso()),
+            )
+
+
+def get_llm_provider_key(user_id: str, provider: str) -> Optional[str]:
+    init_db()
+    with connect() as con:
+        row = con.execute(
+            "SELECT key_enc FROM llm_provider_keys WHERE user_id=? AND provider=?", (user_id, provider)
+        ).fetchone()
+    return row["key_enc"] if row else None
+
+
+def get_any_llm_provider_key_enc(provider: str) -> Optional[str]:
+    """수집기 등 로그인 사용자가 없는 백그라운드 작업이 쓸 LLM 키를 찾는다.
+
+    get_any_bizinfo_key_enc()와 동일한 패턴: 관리자가 등록한 키를 우선하고,
+    없으면 아무 사용자나 등록한 키를 사용한다.
+    """
+    init_db()
+    with connect() as con:
+        row = con.execute(
+            """
+            SELECT k.key_enc FROM llm_provider_keys k JOIN users u ON u.id = k.user_id
+            WHERE k.provider=? ORDER BY u.is_admin DESC, u.created_at ASC LIMIT 1
+            """,
+            (provider,),
+        ).fetchone()
+    return row["key_enc"] if row else None
+
+
+# ──────────────────────────── 수집 레시피 ────────────────────────────
+
+def get_any_llm_key_enc(provider: str) -> Optional[str]:
+    """수집기가 쓸 LLM 키를 찾는다. get_any_bizinfo_key_enc()와 동일한 패턴이되,
+    anthropic은 새 llm_provider_keys 테이블에 없으면 레거시 users.anthropic_api_key_enc
+    컬럼도 확인한다 (신규 테이블로 옮기기 전 등록된 사용자도 계속 동작하도록).
+    """
+    key = get_any_llm_provider_key_enc(provider)
+    if key:
+        return key
+    if provider != "anthropic":
+        return None
+    init_db()
+    with connect() as con:
+        row = con.execute(
+            "SELECT anthropic_api_key_enc FROM users WHERE anthropic_api_key_enc IS NOT NULL "
+            "ORDER BY is_admin DESC, created_at ASC LIMIT 1"
+        ).fetchone()
+    return row["anthropic_api_key_enc"] if row else None
+
+
+def get_any_llm_preference() -> Optional[Dict[str, Any]]:
+    """로그인 사용자가 없는 백그라운드 작업(수집기 등)이 쓸 모델 설정을 찾는다.
+
+    관리자가 골라둔 모델을 우선하고, 없으면 아무 사용자나 설정해둔 모델을 쓴다.
+    아무도 설정하지 않았으면 None을 반환하며, 호출부에서 llm.DEFAULT_MODEL_ID로
+    떨어지면 된다.
+    """
+    init_db()
+    with connect() as con:
+        row = con.execute(
+            """
+            SELECT s.value_json FROM user_settings s JOIN users u ON u.id = s.user_id
+            WHERE s.key='llm_preference' ORDER BY u.is_admin DESC, u.created_at ASC LIMIT 1
+            """
+        ).fetchone()
+    if not row:
+        return None
+    try:
+        return json.loads(row["value_json"])
+    except Exception:
+        return None
+
+
+def get_source_recipe(source_id: str) -> Optional[Dict[str, Any]]:
+    init_db()
+    with connect() as con:
+        row = con.execute(
+            "SELECT recipe_json, discovered_at, verified_ok FROM source_recipes WHERE source_id=?",
+            (source_id,),
+        ).fetchone()
+    if not row:
+        return None
+    try:
+        recipe = json.loads(row["recipe_json"])
+    except Exception:
+        return None
+    return {
+        "recipe": recipe,
+        "discovered_at": row["discovered_at"],
+        "verified_ok": bool(row["verified_ok"]),
+    }
+
+
+def set_source_recipe(source_id: str, recipe: Dict[str, Any], verified_ok: bool = False) -> None:
+    init_db()
+    with connect() as con:
+        con.execute(
+            """
+            INSERT INTO source_recipes(source_id, recipe_json, discovered_at, verified_ok) VALUES (?, ?, ?, ?)
+            ON CONFLICT(source_id) DO UPDATE SET recipe_json=excluded.recipe_json,
+                discovered_at=excluded.discovered_at, verified_ok=excluded.verified_ok
+            """,
+            (source_id, json.dumps(recipe, ensure_ascii=False), now_iso(), 1 if verified_ok else 0),
+        )
 
 
 def create_session(user_id: str, token: str, ttl_days: int = 30) -> None:
