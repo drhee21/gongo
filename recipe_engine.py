@@ -9,8 +9,10 @@
 """
 from __future__ import annotations
 
+import html
 import json
 import time
+import xml.etree.ElementTree as ET
 from typing import Any, Dict, List, Optional
 from urllib.parse import urljoin, urlparse
 
@@ -147,6 +149,59 @@ def _extract_json_field(item: Any, spec: Dict[str, Any]) -> Optional[str]:
     if raw is None:
         return None
     return _apply_field(str(raw), spec)
+
+
+def _xml_find(item_el: ET.Element, path: str) -> Optional[ET.Element]:
+    """json의 점(.) 구분 경로와 같은 convention으로 xml 요소를 찾는다."""
+    node = item_el
+    for part in path.split("."):
+        if not part:
+            continue
+        found = node.find(part)
+        if found is None:
+            return None
+        node = found
+    return node
+
+
+def _xml_findall(root: ET.Element, path: str) -> List[ET.Element]:
+    """item_selector: 반복되는 항목 요소들을 점(.) 구분 경로의 마지막 태그명으로 찾는다."""
+    if not path:
+        return list(root)
+    parts = [p for p in path.split(".") if p]
+    if not parts:
+        return list(root)
+    # ET.fromstring()이 돌려주는 root는 이미 문서의 최상위 태그 그 자체인데,
+    # LLM이 경로 첫 조각에 그 루트 태그 이름까지 포함시켜 줄 때가 있다(예: 실제
+    # root가 <openAPI>인데 selector를 "openAPI.row"로 지정). 그 경우를 중복으로
+    # 보고 건너뛴다 — 안 그러면 root의 자식 중 "openAPI"를 찾다가 못 찾아 0건이 된다.
+    if parts[0] == root.tag:
+        parts = parts[1:]
+    if not parts:
+        return list(root)
+    *ancestors, last = parts
+    node = root
+    for part in ancestors:
+        found = node.find(part)
+        if found is None:
+            return []
+        node = found
+    return node.findall(last)
+
+
+def _extract_xml_field(item_el: ET.Element, spec: Dict[str, Any]) -> Optional[str]:
+    selector = spec.get("selector")
+    target = _xml_find(item_el, selector) if selector else item_el
+    if target is None:
+        return None
+    attr = spec.get("attr")
+    raw = target.get(attr) if attr else target.text
+    if raw:
+        # 일부 공공기관 XML 피드는 엔티티를 이중 인코딩해서 내려준다(예: 원문의
+        # "&amp;apos;"가 XML 파싱을 거치면 "&apos;" 문자열로 남는다). 정상
+        # 텍스트에는 영향이 없으므로 항상 한 번 더 unescape해서 안전하게 복원한다.
+        raw = collector.clean(html.unescape(raw))
+    return _apply_field(raw, spec)
 
 
 def _fetch_page(url: str, fmt: str, timeout: int) -> str:
@@ -302,19 +357,32 @@ def run_recipe(
     out: List[Dict[str, Any]] = []
     prev_count = 0
     for i, url in enumerate(_paged_urls(recipe)):
-        text = _fetch_page(url, fmt, timeout)
         page_items: List[Dict[str, Any]] = []
 
         if fmt == "html":
+            text = _fetch_page(url, fmt, timeout)
             soup = BeautifulSoup(text, "html.parser")
             for el in soup.select(item_selector):
                 fields = {k: _extract_html_field(el, spec) for k, spec in field_map.items()}
                 page_items.append(fields)
         elif fmt == "json":
+            text = _fetch_page(url, fmt, timeout)
             data = json.loads(text)
             items = _json_path(data, item_selector) or []
             for it in items:
                 fields = {k: _extract_json_field(it, spec) for k, spec in field_map.items()}
+                page_items.append(fields)
+        elif fmt == "xml":
+            # requests가 이미 디코딩한 문자열(_fetch_page의 결과)을 ET.fromstring에
+            # 넘기면, 그 문자열에 XML 인코딩 선언이 남아있을 때 ValueError가 난다
+            # ("Unicode strings with encoding declaration are not supported").
+            # 그래서 xml만 원본 바이트를 직접 가져와 파싱한다 — ET가 선언된 인코딩을
+            # 스스로 존중하게 하기 위함이다.
+            r = collector.SESSION.get(url, timeout=timeout)
+            r.raise_for_status()
+            root = ET.fromstring(r.content)
+            for el in _xml_findall(root, item_selector):
+                fields = {k: _extract_xml_field(el, spec) for k, spec in field_map.items()}
                 page_items.append(fields)
         else:
             raise RuntimeError(f"지원하지 않는 레시피 포맷입니다: {fmt}")
@@ -403,7 +471,11 @@ AGENTIC_DISCOVER_SYSTEM_PROMPT = (
     "진짜 상세 페이지가 맞는지(제목·날짜 등 실제 공고 내용이 보이는지) 검증하고 나서 제출해라 "
     "— 검증 없이 추측만으로 제출하지 마라. url 필드를 여러 값 조합으로 만들어야 하면 정규식에 "
     "그룹을 여러 개 잡고 template에 {1},{2}... 로 참조해서 조립해라.\n"
-    "- CSS 선택자는 실제 페이지에 있는 클래스/태그만 사용해라.\n"
+    "- format이 html이면 selector는 실제 페이지에 있는 클래스/태그로 만든 CSS 선택자다.\n"
+    "- format이 json/xml이면 selector는 항목 요소 기준 점(.) 구분 경로다(예: 자식 태그/키 이름이 "
+    "'title'이면 selector는 'title'). item_selector도 마찬가지로 반복되는 항목에 이르는 점(.) "
+    "구분 경로이고, 마지막 조각이 반복되는 태그/키 이름이다(예: 목록 루트 밑에 <row> 여러 개가 "
+    "바로 있으면 'row', 그 밑에 한 단계 더 있으면 '상위태그.row').\n"
     "- pagination.param도 마찬가지로, 실제 페이지네이션에 쓰이는 정확한 파라미터 이름이라는 "
     "확신이 들 때만 채워라 — 필요하면 fetch_url로 두 번째 페이지를 실제로 가져와서 확인해라. "
     "확인 못 하면 null로 남겨라.\n"
