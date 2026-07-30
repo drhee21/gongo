@@ -18,6 +18,14 @@ import litellm
 # 공급자별로 파라미터를 걸러내는 코드를 따로 두지 않아도 된다.
 litellm.drop_params = True
 
+# Anthropic 모델로 가는 요청에 한해 system 메시지와 마지막 메시지에 자동으로
+# prompt caching 브레이크포인트를 건다 (다른 공급자·미지원 모델이면 조용히
+# 건너뛴다). recipe_engine.py의 에이전틱 레시피 발견처럼 매 턴 전체 대화
+# 기록을 통째로 재전송하는 도구 호출 루프에서 반복되는 앞부분을 캐시로 읽어
+# 비용/지연을 크게 줄여준다 — 호출부(tool_call/structured_call)는 아무것도
+# 몰라도 된다.
+litellm.enable_anthropic_prompt_caching = True
+
 UserContent = Union[str, List[Dict[str, Any]]]
 
 # id는 litellm이 요구하는 "<공급자>/<모델명>" 형식이다 — 이 접두어가 어떤 공급자
