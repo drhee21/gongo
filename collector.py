@@ -1491,6 +1491,7 @@ def collect_all(write_db: bool = True) -> CollectRun:
     run = CollectRun()
     common = cfg.get("common", {})
     cap = int(common.get("max_items_per_source", 60))
+    board_list_urls: Dict[str, str] = {}
 
     # Bizinfo and routed institutional notices.
     bcfg = cfg.get("bizinfo", {})
@@ -1520,6 +1521,11 @@ def collect_all(write_db: bool = True) -> CollectRun:
 
     # K-Startup.
     kcfg = _apply_source_override(cfg.get("kstartup", {}), "kstartup", overrides)
+    if clean(kcfg.get("list_url") or KSTARTUP_DEFAULT_URL):
+        # nrf/kddf 등 게시판과 마찬가지로, source_recipes에 저장된 레시피가 있으면
+        # 아래 flag_source_anomalies() 이상 감지 시 recover_source_via_recipe()가
+        # 이 소스도 복구 대상으로 볼 수 있게 board_list_urls에 등록해둔다.
+        board_list_urls["kstartup"] = clean(kcfg.get("list_url") or KSTARTUP_DEFAULT_URL)
     if kcfg.get("enabled", False):
         try:
             run.record("kstartup", collect_kstartup({**common, **kcfg})[:cap], "정상")
@@ -1529,7 +1535,6 @@ def collect_all(write_db: bool = True) -> CollectRun:
         run.record("kstartup", [], "비활성화")
 
     # Direct boards.
-    board_list_urls: Dict[str, str] = {}
     for sid, raw_board_cfg in (cfg.get("boards") or {}).items():
         if sid.startswith("_"):
             continue

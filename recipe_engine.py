@@ -1,16 +1,17 @@
 # -*- coding: utf-8 -*-
 """LLM이 한 번 분석해서 만든 '레시피'로 공고 사이트를 결정적으로 수집한다.
 
-`discover_recipe()`가 사이트 구조를 LLM에 한 번 보여주고 선택자/필드 매핑을
-돌려받으면(레시피), `run_recipe()`는 그 레시피를 코드로만 반복 실행한다 —
-매 수집마다 LLM을 다시 부르지 않는다. 새 사이트 등록과 "사이트 구조가 바뀌어
-갑자기 0건이 됨" 복구가 둘 다 이 두 함수를 그대로 사용한다.
+`discover_recipe_agentic()`이 사이트 구조를 LLM에게 조사시켜(필요하면 외부 JS도
+직접 열어보고 후보 URL을 검증해가며) 선택자/필드 매핑을 돌려받으면(레시피),
+`run_recipe()`는 그 레시피를 코드로만 반복 실행한다 — 매 수집마다 LLM을 다시
+부르지 않는다. 새 사이트 등록과 "사이트 구조가 바뀌어 갑자기 0건이 됨" 복구가
+둘 다 이 두 함수를 그대로 사용한다.
 """
 from __future__ import annotations
 
 import json
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup, Comment
@@ -81,23 +82,6 @@ RECIPE_SCHEMA = {
     "additionalProperties": False,
 }
 
-DISCOVER_SYSTEM_PROMPT = (
-    "너는 한국 정부지원사업 공고 목록 페이지의 구조를 분석해서, 이후 코드가 매번 LLM 없이도\n"
-    "그대로 재사용할 수 있는 '수집 레시피'를 만드는 어시스턴트다. 전달받은 페이지 원본(HTML/JSON/XML)을\n"
-    "분석해서 공고 목록의 각 항목을 가리키는 선택자와, 항목별 제목/링크/기관/시작일/종료일을\n"
-    "뽑아내는 필드별 선택자를 찾아라.\n"
-    "- CSS 선택자는 실제 페이지에 있는 클래스/태그만 사용해라.\n"
-    "- pagination.param은 전달받은 텍스트 안에 그 정확한 쿼리 파라미터 문자열이 실제로 보일 때만\n"
-    "  채워라. 페이지네이션 링크/버튼이 텍스트에 안 보이면(잘려서 없거나 원래 없거나) 절대\n"
-    "  'pageNo', 'page' 같은 흔한 이름을 추측해서 채우지 마라 — 반드시 null로 남겨라. 잘못된\n"
-    "  파라미터는 없는 것보다 나쁘다. 이후 코드가 null이면 페이지네이션 없이 첫 페이지만 쓴다.\n"
-    "- 날짜가 '2026.01.01 ~ 2026.02.01'처럼 한 필드에 같이 있으면 start/end 모두 그 필드의 selector를\n"
-    "  가리키게 하고 regex로 각각 앞/뒤 날짜만 뽑아라.\n"
-    "- 선택자 몇 개로는 도저히 안정적으로 추출할 수 없을 만큼 구조가 불규칙하면, mode를 llm_direct로\n"
-    "  하고 나머지 필드는 최선의 추정치로 채워라."
-)
-
-
 def _content_for_prompt(source_id: str, sample_content: str) -> str:
     return f"[소스 ID: {source_id}]\n[페이지 원본]\n{sample_content}"
 
@@ -111,32 +95,6 @@ def _strip_boilerplate_html(html_text: str) -> str:
         comment.extract()
     body = soup.find("body") or soup
     return collector.clean(body.decode())
-
-
-def discover_recipe(
-    source_id: str,
-    sample_content: str,
-    list_url: str,
-    fmt: str,
-    model_id: str,
-    api_key: str,
-) -> Dict[str, Any]:
-    """샘플 페이지 내용을 LLM에 한 번 보여주고 재사용 가능한 레시피를 받는다."""
-    recipe = llm.structured_call(
-        model_id,
-        api_key,
-        DISCOVER_SYSTEM_PROMPT,
-        _content_for_prompt(source_id, sample_content),
-        RECIPE_SCHEMA,
-        max_tokens=4000,
-    )
-    # 호출자가 넘긴 list_url이 진짜 수집 대상 URL이다 — LLM이 페이지 안의 다른
-    # 링크를 보고 그럴듯하지만 틀린 URL을 추측해 반환하는 경우가 있어서, 항상
-    # 호출자 값으로 덮어쓴다 (LLM에게는 fetch.url을 채우라고 요청하지 않는 편이
-    # 낫지만, 스키마가 요구 필드라 결과에 남는다).
-    recipe.setdefault("fetch", {})["url"] = list_url
-    recipe["fetch"]["format"] = fmt
-    return recipe
 
 
 def _apply_field(value: Optional[str], spec: Dict[str, Any]) -> Optional[str]:
@@ -399,95 +357,12 @@ def run_recipe(
     return out[:max_items]
 
 
-def _url_like(value: Optional[str]) -> bool:
-    """레시피가 뽑은 url 값이 실제로 링크로 쓸 수 있는 형태인지 대충 판별한다.
-
-    NRF의 onclick 인자 하나만 뽑은 "023178" 같은 값처럼, 그럴듯해 보이지만
-    실제로는 페이지 이동에 못 쓰는 값을 잡아내기 위한 최소한의 체크다.
-    """
-    if not value:
-        return False
-    return value.startswith(("http://", "https://", "/", "./", "../", "#"))
-
-
-def _diagnose_broken_output(items: List[Dict[str, Any]]) -> Optional[str]:
-    """추출 결과가 뻔히 잘못됐다고 볼 수 있는 신호를 찾는다. 문제 없으면 None."""
-    if not items:
-        return "결과가 0건입니다."
-    bad_url_count = sum(1 for it in items if not _url_like(it.get("url")))
-    if bad_url_count > len(items) / 2:
-        samples = [it.get("url") for it in items[:3]]
-        return f"url 필드 대부분이 실제 링크 형태가 아닙니다 (예: {samples}) — 페이지 이동에 쓸 수 없는 값입니다."
-    empty_title_count = sum(1 for it in items if not (it.get("title") or "").strip())
-    if empty_title_count > len(items) / 2:
-        return "title 필드 대부분이 비어 있습니다."
-    return None
-
-
-REPAIR_SYSTEM_PROMPT = (
-    DISCOVER_SYSTEM_PROMPT
-    + "\n\n이번엔 처음이 아니라, 네가 방금 만든 레시피를 실제로 실행해봤더니 문제가 발견되어 "
-    "다시 요청하는 것이다. 아래 [이전 레시피]와 [발견된 문제]를 보고, 같은 페이지 원본을 "
-    "다시 분석해서 문제를 해결한 새 레시피를 만들어라. 특히 url 필드가 문제라면, onclick이나 "
-    "href 같은 속성 하나만으로는 완전한 링크를 못 만들 수 있다는 점을 감안해라 — 그런 경우 "
-    "선택자/속성을 다른 곳으로 바꿔보거나, 그래도 안 되면 mode를 llm_direct로 바꿔서 이후에는 "
-    "선택자 대신 LLM이 직접 추출하게 해라."
-)
-
-
-def discover_recipe_verified(
-    source_id: str,
-    sample_content: str,
-    list_url: str,
-    fmt: str,
-    model_id: str,
-    api_key: str,
-    common: Dict[str, Any],
-) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
-    """discover_recipe()로 레시피를 만든 뒤, 실제로 한 번 실행해보고 결과가 뻔히
-    잘못됐으면(0건, 링크가 아닌 url, 빈 title) 그 실패 내용을 보여주고 한 번만
-    다시 만들어보게 한다. 그래도 못 고치면 마지막 레시피와 그 실행 결과를 그대로
-    반환한다 — 이 함수는 실패해도 예외를 던지지 않는다(호출부가 discover_recipe()와
-    동일하게 다룰 수 있어야 한다). 검증 과정에서 이미 실행해본 결과를 반환값에
-    같이 담아서, 호출부가 같은 레시피를 다시 실행해보는 중복 호출을 안 해도 된다.
-    """
-    recipe = discover_recipe(source_id, sample_content, list_url, fmt, model_id, api_key)
-
-    try:
-        items = run_recipe(source_id, recipe, common, model_id=model_id, api_key=api_key)
-        problem = _diagnose_broken_output(items)
-    except Exception as e:
-        items = []
-        problem = f"레시피 실행이 실패했습니다: {e}"
-
-    if not problem:
-        return recipe, items
-
-    repair_content = (
-        _content_for_prompt(source_id, sample_content)
-        + f"\n\n[이전 레시피]\n{json.dumps(recipe, ensure_ascii=False)}"
-        + f"\n\n[발견된 문제]\n{problem}"
-    )
-    repaired = llm.structured_call(
-        model_id, api_key, REPAIR_SYSTEM_PROMPT, repair_content, RECIPE_SCHEMA, max_tokens=4000,
-    )
-    repaired.setdefault("fetch", {})["url"] = list_url
-    repaired["fetch"]["format"] = fmt
-
-    try:
-        repaired_items = run_recipe(source_id, repaired, common, model_id=model_id, api_key=api_key)
-    except Exception:
-        repaired_items = items  # 복구도 실패하면 첫 시도 결과라도 남긴다 (보통 빈 목록).
-
-    return repaired, repaired_items
-
-
-# ──────────────────────────── 에이전틱 발견 (실험) ────────────────────────────
-# discover_recipe()는 목록 페이지 스냅샷 하나만 보고 한 번에 레시피를 만든다 —
-# 그래서 페이지네이션 파라미터나 상세 URL 조합 로직이 <script src="..."> 외부
-# 파일에만 있는 사이트는 원리적으로 못 맞힌다. 아래는 LLM에게 fetch_url 도구를
-# 줘서, 필요하면 그 외부 JS도 직접 열어보고, 후보 URL을 실제로 가져와서
-# 검증까지 한 뒤에 레시피를 제출하게 만든 버전이다.
+# ──────────────────────────── 에이전틱 레시피 발견 ────────────────────────────
+# 정적 페이지 스냅샷 한 번만 보고 레시피를 만드는 방식은 페이지네이션 파라미터나
+# 상세 URL 조합 로직이 <script src="..."> 외부 파일에만 있는 사이트를 원리적으로
+# 못 맞히고, 실제로 실패율이 높아 폐기했다. 아래는 LLM에게 fetch_url 도구를 줘서,
+# 필요하면 외부 JS도 직접 열어보고, 후보 URL을 실제로 가져와서 검증까지 한 뒤에
+# 레시피를 제출하게 만든 버전이다 — 발견은 이 방식 하나만 쓴다.
 
 FETCH_URL_TOOL = {
     "type": "function",
@@ -566,10 +441,10 @@ def discover_recipe_agentic(
     common: Optional[Dict[str, Any]] = None,
     max_tool_calls: int = 8,
 ) -> Dict[str, Any]:
-    """discover_recipe()의 에이전틱 버전. LLM이 fetch_url 도구로 외부 JS 파일을
-    직접 열어보거나 후보 URL을 실제로 검증해본 뒤 submit_recipe로 레시피를
-    제출한다. max_tool_calls를 넘기면(무한 루프 방지) 마지막으로 본 레시피
-    후보가 없으면 예외를 던진다.
+    """레시피 발견의 유일한 경로. LLM이 fetch_url 도구로 외부 JS 파일을 직접
+    열어보거나 후보 URL을 실제로 검증해본 뒤 submit_recipe로 레시피를 제출한다.
+    max_tool_calls를 넘기면(무한 루프 방지) 마지막으로 본 레시피 후보가 없으면
+    예외를 던진다.
     """
     timeout = int((common or {}).get("timeout_sec", 20))
     messages: List[Dict[str, Any]] = [
