@@ -410,7 +410,7 @@ async function loadAllSources(){
     const custom = (customRes.items || []).map(s => `
       <div class="custom-source-row" data-source="${esc(s.id)}" data-kind="custom">
         <div class="custom-source-info">
-          <div><strong>${esc(s.name)}</strong> ${s.enabled ? '' : '<span class="badge-warn">비활성</span>'}${s.anomaly ? `<span class="badge-warn" title="${esc(s.anomaly_note||'')}">⚠ 이상감지</span>` : ''}${s.recipe_mode === 'llm_direct' ? '<span class="badge-warn" title="매 수집마다 LLM 호출이 필요합니다">⚡ llm_direct</span>' : ''}</div>
+          <div><strong>${esc(s.name)}</strong> ${s.enabled ? '' : '<span class="badge-warn">비활성</span>'}${s.anomaly ? `<span class="badge-warn" title="${esc(s.anomaly_note||'')}">⚠ 이상감지</span>` : ''}${s.uses_detail_fetch ? '<span class="badge-warn" title="목록 페이지만으로는 부족해서 항목마다 상세 페이지를 추가로 가져옵니다 — 수집이 더 오래 걸립니다">🔎 상세 페이지 조회</span>' : ''}</div>
           <div class="custom-source-url">${esc(s.list_url)}</div>
           <div class="meta">${esc(s.state || '미확인')} · ${esc(Number(s.count)||0)}건 ${s.last_collected_at ? '· ' + esc(s.last_collected_at) : ''}</div>
         </div>

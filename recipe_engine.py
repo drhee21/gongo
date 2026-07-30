@@ -24,6 +24,15 @@ import llm
 FIELD_SPEC = {
     "type": "object",
     "properties": {
+        "source": {
+            "type": "string",
+            "enum": ["list", "detail"],
+            "description": "이 필드를 목록 페이지(list)에서 뽑을지, 각 항목의 상세 페이지(detail)에서 "
+            "뽑을지. url 필드는 항상 list여야 한다(상세 페이지를 가져오려면 그 URL이 먼저 필요하므로). "
+            "detail로 표시한 필드가 하나라도 있으면, 수집기가 각 항목마다 상세 페이지를 한 번씩 더 "
+            "가져와서 그 필드들을 채운다 — 목록에 없는 정보(예: 실제 마감일)가 상세 페이지에만 있을 "
+            "때만 detail을 써라.",
+        },
         "selector": {"type": ["string", "null"], "description": "항목 요소 기준 CSS 선택자. 항목 자체 텍스트를 쓰려면 null"},
         "attr": {"type": ["string", "null"], "description": "가져올 HTML 속성명(예: href). 텍스트를 쓰려면 null"},
         "regex": {"type": ["string", "null"], "description": "추출한 값에서 원하는 부분만 뽑는 정규식. 그룹을 여러 개 잡아서 template과 같이 쓸 수 있다. 불필요하면 null"},
@@ -32,7 +41,7 @@ FIELD_SPEC = {
             "description": "regex로 잡은 그룹들을 {1},{2}... 로 참조해 최종 값을 조립하는 템플릿 (예: 여러 인자로 URL을 만들 때). 그룹 하나만 그대로 쓰면 null",
         },
     },
-    "required": ["selector", "attr", "regex", "template"],
+    "required": ["source", "selector", "attr", "regex", "template"],
     "additionalProperties": False,
 }
 
@@ -78,13 +87,8 @@ RECIPE_SCHEMA = {
             "required": ["title", "url", "org", "start", "end"],
             "additionalProperties": False,
         },
-        "mode": {
-            "type": "string",
-            "enum": ["structured", "llm_direct"],
-            "description": "structured: 위 선택자로 결정적으로 파싱. llm_direct: 선택자로 담기 어려울 만큼 불규칙해서 매 수집마다 LLM이 직접 추출해야 함",
-        },
     },
-    "required": ["fetch", "item_selector", "field_map", "mode"],
+    "required": ["fetch", "item_selector", "field_map"],
     "additionalProperties": False,
 }
 
@@ -245,125 +249,37 @@ def _paged_urls(recipe: Dict[str, Any], max_pages: int = 20) -> List[str]:
     return [url]
 
 
-EXTRACT_ITEM_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "items": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "title": {"type": "string"},
-                    "url": {"type": ["string", "null"]},
-                    "org": {"type": ["string", "null"]},
-                    "start": {"type": ["string", "null"], "description": "YYYY-MM-DD 또는 모르면 null"},
-                    "end": {"type": ["string", "null"], "description": "YYYY-MM-DD 또는 모르면 null"},
-                },
-                "required": ["title", "url", "org", "start", "end"],
-                "additionalProperties": False,
-            },
-        },
-    },
-    "required": ["items"],
-    "additionalProperties": False,
-}
-
-EXTRACT_SYSTEM_PROMPT = (
-    "너는 한국 정부지원사업 공고 목록 페이지 원본(HTML)에서 공고 항목을 전부 추출하는 어시스턴트다.\n"
-    "각 공고의 제목, 상세 링크(URL, 상대경로면 그대로), 주관기관, 접수 시작일/종료일(YYYY-MM-DD, 모르면 null)을\n"
-    "뽑아라. 목록에 보이는 공고 전부를 반환해라 (메뉴/배너/광고 등 공고가 아닌 요소는 제외)."
-)
+def _extract_field(fmt: str, doc: Any, spec: Dict[str, Any]) -> Optional[str]:
+    if fmt == "html":
+        return _extract_html_field(doc, spec)
+    if fmt == "json":
+        return _extract_json_field(doc, spec)
+    return _extract_xml_field(doc, spec)
 
 
-def _run_llm_direct(
-    source_id: str,
-    recipe: Dict[str, Any],
-    common: Dict[str, Any],
-    model_id: str,
-    api_key: str,
-) -> List[Dict[str, Any]]:
-    """선택자로 안정적으로 담기 어려운 사이트를 위한 예비 실행 경로 — 매 수집마다 LLM을 부른다.
-
-    레시피의 mode가 'llm_direct'로 저장된 소스에서만 쓰인다. 비용이 페이지 수만큼
-    매번 발생하므로, 이 경로를 타는 소스가 admin 화면에 드러나야 한다 (Task #8에서 연결).
-    """
-    fetch = recipe["fetch"]
-    fmt = fetch.get("format", "html")
-    timeout = int(common.get("timeout_sec", 20))
-    delay = float(common.get("request_delay_sec", 0.8))
-    max_items = int(common.get("max_items_per_source", 60))
-    base_url = fetch["url"]
-
-    if common.get("respect_robots", True) and not collector.robots_allows(base_url):
-        raise PermissionError("robots.txt 차단")
-
-    out: List[Dict[str, Any]] = []
-    prev_count = 0
-    for url in _paged_urls(recipe):
-        text = _fetch_page(url, fmt, timeout)
-        if fmt == "html":
-            text = _strip_boilerplate_html(text)
-        data = llm.structured_call(
-            model_id, api_key,
-            EXTRACT_SYSTEM_PROMPT,
-            text,
-            EXTRACT_ITEM_SCHEMA,
-            max_tokens=8000,
-        )
-        page_items = data.get("items") or []
-        if not page_items:
-            break
-        for fields in page_items:
-            title = fields.get("title")
-            if not title:
-                continue
-            start = collector.parse_date(fields.get("start"))
-            end = collector.parse_date(fields.get("end"))
-            item = collector.normalize(
-                source_id, title, fields.get("org"), "기타", start, end,
-                fields.get("url"), raw={"collector": "recipe_engine_llm_direct", "source_id": source_id},
-            )
-            collector.mark_dates_unknown_if_needed(item, title, start_was_known=bool(start))
-            out.append(item)
-        # 페이지 안에 중복 DOM(모바일/데스크톱 버전 등)이 섞여 있는 사이트가 있어서,
-        # 중복 제거 전 개수로 max_items 도달 여부를 판단하면 아직 안 채워졌는데도
-        # 다음 페이지를 안 가져오는 일이 생긴다 — 매 페이지마다 중복 제거 후 판단한다.
-        out = collector.deduplicate(out)
-        if len(out) >= max_items:
-            break
-        if len(out) == prev_count:
-            # 직전 페이지 대비 새 항목이 하나도 안 늘었다 — 페이지네이션 파라미터가
-            # 실제 사이트와 안 맞아서 같은 페이지를 반복해서 받고 있을 수 있다
-            # (예: LLM이 추측한 쿼리 파라미터가 틀린 경우). 더 가봐야 어차피 같은
-            # 내용일 가능성이 높으므로, 페이지당 LLM 호출 비용만 낭비하지 않게
-            # 여기서 멈춘다.
-            break
-        prev_count = len(out)
-        time.sleep(delay)
-
-    if not out:
-        raise RuntimeError(f"레시피(llm_direct) 실행 결과 0건: '{source_id}'")
-    return collector.deduplicate(out)[:max_items]
+def _parse_doc(fmt: str, url: str, timeout: int) -> Any:
+    """html이면 BeautifulSoup, json이면 dict/list, xml이면 Element를 돌려준다 — 목록
+    페이지와 상세 페이지 둘 다 같은 포맷을 쓴다고 가정하고 이 함수로 공통 처리한다."""
+    if fmt == "xml":
+        r = collector.SESSION.get(url, timeout=timeout)
+        r.raise_for_status()
+        return ET.fromstring(r.content)
+    text = _fetch_page(url, fmt, timeout)
+    if fmt == "json":
+        return json.loads(text)
+    return BeautifulSoup(text, "html.parser")
 
 
-def run_recipe(
-    source_id: str,
-    recipe: Dict[str, Any],
-    common: Dict[str, Any],
-    model_id: Optional[str] = None,
-    api_key: Optional[str] = None,
-) -> List[Dict[str, Any]]:
-    """레시피를 실행해 공고 목록을 만든다.
+def run_recipe(source_id: str, recipe: Dict[str, Any], common: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """레시피를 실행해 공고 목록을 만든다. 선택자만으로 결정적으로 파싱하며 LLM 호출이
+    전혀 없다 — discover_recipe_agentic()이 구조를 한 번 알아내고 나면, 그 이후 실제
+    수집은 항상 이 함수가 코드로만 반복한다.
 
-    mode가 'structured'면 선택자만으로 결정적으로 파싱해 LLM 호출이 전혀 없다.
-    mode가 'llm_direct'면 페이지마다 LLM을 불러 직접 추출한다 — 이때는
-    model_id/api_key가 필요하다.
-    """
-    if recipe.get("mode") == "llm_direct":
-        if not (model_id and api_key):
-            raise RuntimeError(f"'{source_id}' 레시피는 mode=llm_direct라 model_id/api_key가 필요합니다")
-        return _run_llm_direct(source_id, recipe, common, model_id, api_key)
-
+    field_map의 어떤 필드가 source="detail"이면, 목록에서 뽑은 그 항목의 url을 이용해
+    상세 페이지를 항목마다 한 번씩 추가로 가져와서 그 필드들을 채운다(목록에 없는 정보,
+    예: 실제 마감일이 상세 페이지에만 있는 경우). 이 상세 페이지 요청은 구조를 다시
+    LLM에게 물어보는 게 아니라, 발견 단계에서 이미 확인된 선택자를 그대로 재사용하는
+    것이므로 여전히 LLM 호출이 없다 — 다만 항목 수만큼 HTTP 요청이 늘어난다."""
     fetch = recipe["fetch"]
     fmt = fetch.get("format", "html")
     timeout = int(common.get("timeout_sec", 20))
@@ -372,8 +288,13 @@ def run_recipe(
     field_map = recipe["field_map"]
     item_selector = recipe["item_selector"]
 
+    list_field_map = {k: v for k, v in field_map.items() if v.get("source") != "detail"}
+    detail_field_map = {k: v for k, v in field_map.items() if v.get("source") == "detail"}
+
     if common.get("respect_robots", True) and not collector.robots_allows(fetch["url"]):
         raise PermissionError("robots.txt 차단")
+
+    detail_robots_checked = False
 
     out: List[Dict[str, Any]] = []
     prev_count = 0
@@ -384,14 +305,14 @@ def run_recipe(
             text = _fetch_page(url, fmt, timeout)
             soup = BeautifulSoup(text, "html.parser")
             for el in soup.select(item_selector):
-                fields = {k: _extract_html_field(el, spec) for k, spec in field_map.items()}
+                fields = {k: _extract_html_field(el, spec) for k, spec in list_field_map.items()}
                 page_items.append(fields)
         elif fmt == "json":
             text = _fetch_page(url, fmt, timeout)
             data = json.loads(text)
             items = _json_path(data, item_selector) or []
             for it in items:
-                fields = {k: _extract_json_field(it, spec) for k, spec in field_map.items()}
+                fields = {k: _extract_json_field(it, spec) for k, spec in list_field_map.items()}
                 page_items.append(fields)
         elif fmt == "xml":
             # requests가 이미 디코딩한 문자열(_fetch_page의 결과)을 ET.fromstring에
@@ -403,7 +324,7 @@ def run_recipe(
             r.raise_for_status()
             root = ET.fromstring(r.content)
             for el in _xml_findall(root, item_selector):
-                fields = {k: _extract_xml_field(el, spec) for k, spec in field_map.items()}
+                fields = {k: _extract_xml_field(el, spec) for k, spec in list_field_map.items()}
                 page_items.append(fields)
         else:
             raise RuntimeError(f"지원하지 않는 레시피 포맷입니다: {fmt}")
@@ -415,6 +336,24 @@ def run_recipe(
             title = fields.get("title")
             if not title:
                 continue
+
+            if detail_field_map and fields.get("url"):
+                detail_url = urljoin(fetch["url"], fields["url"])
+                fields["url"] = detail_url
+                if not detail_robots_checked:
+                    detail_robots_checked = True
+                    if common.get("respect_robots", True) and not collector.robots_allows(detail_url):
+                        raise PermissionError("robots.txt 차단(상세 페이지)")
+                try:
+                    detail_doc = _parse_doc(fmt, detail_url, timeout)
+                    for k, spec in detail_field_map.items():
+                        fields[k] = _extract_field(fmt, detail_doc, spec)
+                    time.sleep(delay)
+                except Exception:
+                    # 상세 페이지 하나가 깨져도 목록 정보만으로 항목 자체는 살린다 —
+                    # 전체 수집을 중단할 이유는 아니다.
+                    pass
+
             start = collector.parse_date(fields.get("start"))
             end = collector.parse_date(fields.get("end"))
             item = collector.normalize(
@@ -430,7 +369,6 @@ def run_recipe(
             collector.mark_dates_unknown_if_needed(item, title, start_was_known=bool(start))
             out.append(item)
 
-        # llm_direct 경로와 동일한 이유로, 페이지마다 중복 제거 후 개수를 판단한다.
         out = collector.deduplicate(out)
         if len(out) >= max_items:
             break
@@ -486,6 +424,12 @@ SUBMIT_RECIPE_TOOL = {
 AGENTIC_DISCOVER_SYSTEM_PROMPT = (
     "너는 한국 정부지원사업 공고 목록 페이지를 조사해서, 이후 코드가 매번 LLM 없이도 그대로 "
     "재사용할 수 있는 '수집 레시피'를 만드는 어시스턴트다. 목록 페이지 원본을 먼저 보여준다.\n"
+    "핵심 원칙: 너는 구조를 딱 한 번만 확인하면 된다. 목록 페이지든 상세 페이지든 페이지네이션 "
+    "다음 페이지든, 그 구조(선택자)는 그 사이트 안에서 항상 같다고 가정해라 — 각 항목의 실제 "
+    "값(제목, 날짜 등)만 다를 뿐이다. 그래서 목록 페이지는 이미 준 원본으로 충분하고, 상세 "
+    "페이지가 필요하면 대표로 한 건만 fetch_url로 확인하면 된다(item마다 반복해서 확인할 필요 "
+    "없다) — 실제로 모든 항목의 상세 페이지를 하나씩 가져오면서 값을 채우는 반복 작업은 네가 "
+    "할 일이 아니라 나중에 이 레시피로 실행되는 코드(로컬 스크래퍼)가 할 일이다.\n"
     "그 안의 링크나 onclick 핸들러만으로 상세 페이지 URL을 확실히 못 만들겠으면, fetch_url "
     "도구로 페이지가 참조하는 외부 JS 파일을 열어서 실제 네비게이션 로직(폼 action, URL 조합 "
     "방식 등)을 확인해라. 후보 URL을 만들었으면 반드시 fetch_url로 그 URL을 실제로 가져와서 "
@@ -507,6 +451,13 @@ AGENTIC_DISCOVER_SYSTEM_PROMPT = (
     "increment로 하면서 param을 null로 남기는 것처럼 서로 안 맞는 조합은 절대 만들지 마라.\n"
     "- 날짜가 한 필드에 같이 있으면 start/end 모두 그 필드의 selector를 가리키게 하고 regex로 "
     "각각 뽑아라.\n"
+    "- field_map의 각 필드는 source를 list 또는 detail로 표시해야 한다. url은 항상 list다. "
+    "나머지 필드도 목록 페이지 안에서 안정적으로 뽑을 수 있으면 기본적으로 list로 해라 — "
+    "detail은 그 정보가 목록에는 전혀 없고 상세 페이지에만 있을 때만 써라(흔한 예: 목록에는 "
+    "게시일만 있고 실제 접수 마감일은 상세 페이지 본문에만 있는 경우). 어떤 필드든 detail로 "
+    "표시하려면, 대표 상세 페이지 하나를 fetch_url로 실제로 열어서 그 필드가 정말 거기 있는지, "
+    "그리고 어떤 선택자로 뽑을 수 있는지 확인하고 나서 채워라 — 확인 안 하고 detail로 표시하지 "
+    "마라.\n"
     "- title 필드의 원본 텍스트가 org 필드와 중복되는 내용을 접두어/접미어로 포함하는 경우가 "
     "흔하다(예: 제목이 \"[기관명] 실제 제목\"처럼 시작하는데 그 '기관명'을 org로도 따로 뽑는 "
     "경우). 이런 순수 중복은 title의 regex로 반드시 걷어내서 실제 제목만 남겨라(예: "
@@ -515,7 +466,6 @@ AGENTIC_DISCOVER_SYSTEM_PROMPT = (
     "마라 — title은 공고를 유일하게 식별할 수 있어야 한다(같은 사업을 재공고/차수만 다르게 "
     "여러 번 올리는 경우가 흔하고, 그 구분 표시가 사라지면 서로 다른 공고가 같은 제목으로 "
     "보여 하나로 오인될 수 있다).\n"
-    "- 그래도 선택자로 안정적으로 담기 어려우면 mode를 llm_direct로 해라.\n"
     "조사가 끝나면 submit_recipe 도구를 호출해서 최종 레시피를 제출해라."
 )
 

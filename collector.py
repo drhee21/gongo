@@ -1437,17 +1437,17 @@ def recover_source_via_recipe(source_id: str, list_url: str, common: Dict[str, A
     """
     import recipe_engine
 
-    model_id = (database.get_any_llm_preference() or {}).get("model_id") or llm.DEFAULT_MODEL_ID
-    key_enc = database.get_any_llm_key_enc(llm.provider_of(model_id))
-    api_key = auth.decrypt_secret(key_enc) if key_enc else None
-
     stored = database.get_source_recipe(source_id)
-    if stored and api_key:
+    if stored:
         try:
-            return recipe_engine.run_recipe(source_id, stored["recipe"], common, model_id=model_id, api_key=api_key)
+            return recipe_engine.run_recipe(source_id, stored["recipe"], common)
         except Exception:
             pass  # 저장된 레시피가 더 이상 안 맞을 수 있다 — 아래에서 새로 발견을 시도한다.
 
+    # 재발견은 LLM을 여러 번 호출하므로 여기서부터만 model_id/api_key가 필요하다.
+    model_id = (database.get_any_llm_preference() or {}).get("model_id") or llm.DEFAULT_MODEL_ID
+    key_enc = database.get_any_llm_key_enc(llm.provider_of(model_id))
+    api_key = auth.decrypt_secret(key_enc) if key_enc else None
     if not api_key:
         return None
     try:
@@ -1459,7 +1459,7 @@ def recover_source_via_recipe(source_id: str, list_url: str, common: Dict[str, A
         recipe = recipe_engine.discover_recipe_agentic(
             source_id, sample, list_url, "html", model_id, api_key, common
         )
-        items = recipe_engine.run_recipe(source_id, recipe, common, model_id=model_id, api_key=api_key)
+        items = recipe_engine.run_recipe(source_id, recipe, common)
         if not items:
             return None
         database.set_source_recipe(source_id, recipe, verified_ok=True)
@@ -1571,13 +1571,11 @@ def collect_all(write_db: bool = True) -> CollectRun:
             run.record(sid, [], "오류", e, name=board_cfg.get("name"), method="게시판")
 
     # 관리자가 URL만으로 등록한 커스텀 소스 — 손으로 쓴 수집기 없이 저장된 레시피만으로
-    # 수집한다. board_list_urls에 등록해두면, 아래 이상 감지/복구 루프가 다른 게시판
-    # 소스와 똑같이 이 소스도 다뤄준다(레시피가 깨지면 재발견까지 자동으로 시도).
+    # 수집한다(선택자만으로 결정적으로 실행되므로 LLM 호출이 없다). board_list_urls에
+    # 등록해두면, 아래 이상 감지/복구 루프가 다른 게시판 소스와 똑같이 이 소스도
+    # 다뤄준다(레시피가 깨지면 재발견까지 자동으로 시도).
     import recipe_engine  # 지연 임포트: recipe_engine이 collector를 임포트하므로 순환 방지
 
-    cs_model_id = (database.get_any_llm_preference() or {}).get("model_id") or llm.DEFAULT_MODEL_ID
-    cs_key_enc = database.get_any_llm_key_enc(llm.provider_of(cs_model_id))
-    cs_api_key = auth.decrypt_secret(cs_key_enc) if cs_key_enc else None
     for cs in database.get_enabled_custom_sources():
         sid = cs["id"]
         board_list_urls[sid] = cs["list_url"]
@@ -1586,7 +1584,7 @@ def collect_all(write_db: bool = True) -> CollectRun:
             run.record(sid, [], "레시피 없음", name=cs["name"], method="레시피")
             continue
         try:
-            items = recipe_engine.run_recipe(sid, stored["recipe"], common, model_id=cs_model_id, api_key=cs_api_key)[:cap]
+            items = recipe_engine.run_recipe(sid, stored["recipe"], common)[:cap]
             run.record(sid, items, "정상", name=cs["name"], method="레시피")
         except PermissionError as e:
             run.record(sid, [], "차단(robots)", e, name=cs["name"], method="레시피")

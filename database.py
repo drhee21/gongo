@@ -992,13 +992,14 @@ def list_custom_sources() -> List[Dict[str, Any]]:
     for r in rows:
         d = dict(r)
         recipe_json = d.pop("recipe_json", None)
-        recipe_mode = None
+        uses_detail_fetch = False
         if recipe_json:
             try:
-                recipe_mode = json.loads(recipe_json).get("mode")
+                field_map = json.loads(recipe_json).get("field_map") or {}
+                uses_detail_fetch = any(v.get("source") == "detail" for v in field_map.values())
             except Exception:
-                recipe_mode = None
-        d["recipe_mode"] = recipe_mode
+                uses_detail_fetch = False
+        d["uses_detail_fetch"] = uses_detail_fetch
         out.append(d)
     return out
 

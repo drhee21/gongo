@@ -548,14 +548,12 @@ class Handler(BaseHTTPRequestHandler):
                     return
 
                 try:
-                    items = recipe_engine.run_recipe(source_id, recipe, common, model_id=model_id, api_key=api_key)
+                    items = recipe_engine.run_recipe(source_id, recipe, common)
                 except Exception as e:
                     self.send_json({"ok": False, "error": f"발견된 레시피 실행에 실패했습니다: {e}", "code": "zero_items"}, status=400)
                     return
 
                 warnings = []
-                if recipe.get("mode") == "llm_direct":
-                    warnings.append("이 레시피는 매 수집마다 LLM 호출이 필요합니다(mode=llm_direct) — 등록된 API 키가 없으면 수집이 실패합니다.")
                 sample_head = items[:10]
                 dup_title_count = sum(
                     1 for it in sample_head if it.get("org") and it.get("title") and it["org"] in it["title"]
@@ -612,7 +610,6 @@ class Handler(BaseHTTPRequestHandler):
                     and isinstance(fetch.get("pagination"), dict)
                     and isinstance(recipe.get("item_selector"), str)
                     and all(k in field_map for k in ("title", "url", "org", "start", "end"))
-                    and recipe.get("mode") in ("structured", "llm_direct")
                 )
                 if not valid:
                     self.send_json({"ok": False, "error": "레시피 형식이 올바르지 않습니다.", "code": "invalid_recipe"}, status=400)
@@ -620,22 +617,11 @@ class Handler(BaseHTTPRequestHandler):
 
                 cfg = collector.load_config()
                 common = cfg.get("common", {})
-                model_id = None
-                api_key = None
-                if recipe.get("mode") == "llm_direct":
-                    model_id = (database.get_user_setting(user["id"], "llm_preference", {}) or {}).get("model_id") or llm.DEFAULT_MODEL_ID
-                    enc_key = resolve_llm_key_enc(user, llm.provider_of(model_id))
-                    if not enc_key:
-                        self.send_json(
-                            {"ok": False, "error": "먼저 '회사 정보'에서 본인의 API 키를 등록해주세요.", "code": "no_llm_key"}, status=400
-                        )
-                        return
-                    api_key = auth.decrypt_secret(enc_key)
 
                 # 미리보기 이후 사이트가 바뀌었을 수 있으므로, 저장 직전 한 번 더
                 # 실행해본다(재발견이 아니라 결정적 실행 1회라 비용이 거의 없다).
                 try:
-                    items = recipe_engine.run_recipe(source_id, recipe, common, model_id=model_id, api_key=api_key)
+                    items = recipe_engine.run_recipe(source_id, recipe, common)
                 except Exception:
                     self.send_json(
                         {"ok": False, "error": "사이트 내용이 미리보기 이후 바뀐 것 같습니다. 다시 미리보기를 실행해주세요.", "code": "stale_preview"},
