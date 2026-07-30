@@ -47,11 +47,15 @@ RECIPE_SCHEMA = {
                 "pagination": {
                     "type": "object",
                     "properties": {
-                        "param": {"type": ["string", "null"], "description": "페이지 번호를 넣는 쿼리 파라미터명. 페이지네이션이 없으면 null"},
-                        "type": {"type": "string", "enum": ["increment", "none"]},
+                        "param": {"type": ["string", "null"], "description": "type이 increment일 때, 페이지 번호를 넣는 쿼리 파라미터명. 없으면 null"},
+                        "type": {"type": "string", "enum": ["increment", "path_template", "none"]},
+                        "url_template": {
+                            "type": ["string", "null"],
+                            "description": "type이 path_template일 때, 페이지 번호가 URL 쿼리가 아니라 경로 중간에 들어가는 경우 쓴다(예: 실제 2페이지 URL이 '.../list/page/2'). 페이지 번호가 들어갈 자리를 {page}로 표시한 전체 URL(예: '.../list/page/{page}'). increment/none이면 null",
+                        },
                         "start": {"type": "integer", "description": "첫 페이지 번호 (보통 1)"},
                     },
-                    "required": ["param", "type", "start"],
+                    "required": ["param", "type", "url_template", "start"],
                     "additionalProperties": False,
                 },
             },
@@ -100,9 +104,15 @@ def _strip_boilerplate_html(html_text: str) -> str:
 
 
 def _apply_field(value: Optional[str], spec: Dict[str, Any]) -> Optional[str]:
+    regex = spec.get("regex")
+    if not regex and spec.get("template") and not spec.get("selector"):
+        # selector도 regex도 없이 template만 있으면, 정규식 그룹을 조합하는 용도가
+        # 아니라 고정값(예: 게시판 전체가 한 기관 소속이라 org를 매번 같은 문자열로
+        # 고정하는 경우)으로 쓰려는 의도로 보고 template을 그대로 반환한다. 페이지에서
+        # 뭘 추출했는지와 무관하게 항상 이 값을 쓴다.
+        return spec["template"]
     if value is None:
         return None
-    regex = spec.get("regex")
     if not regex:
         return value
     import re
@@ -213,15 +223,26 @@ def _fetch_page(url: str, fmt: str, timeout: int) -> str:
 
 
 def _paged_urls(recipe: Dict[str, Any], max_pages: int = 20) -> List[str]:
+    """increment(쿼리 파라미터, 예: ?page=2)와 path_template(경로 중간, 예:
+    /list/page/2) 두 가지 페이지네이션 방식을 지원한다. 많은 한국 공공기관 CMS가
+    쿼리 파라미터가 아니라 경로에 페이지 번호를 넣는데, 예전에는 그런 사이트를
+    발견해도 param이 없다는 이유로 항상 첫 페이지만 가져왔다."""
     fetch = recipe["fetch"]
     url = fetch["url"]
     pagination = fetch.get("pagination") or {}
-    if pagination.get("type") != "increment" or not pagination.get("param"):
-        return [url]
-    param = pagination["param"]
+    ptype = pagination.get("type")
     start = int(pagination.get("start", 1))
-    sep = "&" if "?" in url else "?"
-    return [url if p == start else f"{url}{sep}{param}={p}" for p in range(start, start + max_pages)]
+
+    if ptype == "increment" and pagination.get("param"):
+        param = pagination["param"]
+        sep = "&" if "?" in url else "?"
+        return [url if p == start else f"{url}{sep}{param}={p}" for p in range(start, start + max_pages)]
+
+    if ptype == "path_template" and pagination.get("url_template"):
+        template = pagination["url_template"]
+        return [template.replace("{page}", str(p)) for p in range(start, start + max_pages)]
+
+    return [url]
 
 
 EXTRACT_ITEM_SCHEMA = {
@@ -476,9 +497,14 @@ AGENTIC_DISCOVER_SYSTEM_PROMPT = (
     "'title'이면 selector는 'title'). item_selector도 마찬가지로 반복되는 항목에 이르는 점(.) "
     "구분 경로이고, 마지막 조각이 반복되는 태그/키 이름이다(예: 목록 루트 밑에 <row> 여러 개가 "
     "바로 있으면 'row', 그 밑에 한 단계 더 있으면 '상위태그.row').\n"
-    "- pagination.param도 마찬가지로, 실제 페이지네이션에 쓰이는 정확한 파라미터 이름이라는 "
-    "확신이 들 때만 채워라 — 필요하면 fetch_url로 두 번째 페이지를 실제로 가져와서 확인해라. "
-    "확인 못 하면 null로 남겨라.\n"
+    "- 페이지네이션은 두 가지 방식이 있다. (1) 쿼리 파라미터 방식(예: '?page=2')이면 "
+    "type을 increment로, 그 파라미터 이름을 param에 채워라. (2) 페이지 번호가 쿼리가 아니라 "
+    "URL 경로 중간에 들어가는 방식(예: 2페이지 실제 URL이 '.../list/page/2')이면 type을 "
+    "path_template으로 하고, 페이지 번호 자리를 {page}로 표시한 전체 URL을 url_template에 "
+    "채워라(예: '.../list/page/{page}') — 이때 param은 null로 둔다. 어느 경우든 실제로 "
+    "fetch_url로 두 번째 페이지를 가져와서 그 URL이 진짜 다음 페이지 내용을 보여주는지 확인하고 "
+    "채워라 — 확인 못 하면 type을 none으로, param과 url_template 둘 다 null로 남겨라. type을 "
+    "increment로 하면서 param을 null로 남기는 것처럼 서로 안 맞는 조합은 절대 만들지 마라.\n"
     "- 날짜가 한 필드에 같이 있으면 start/end 모두 그 필드의 selector를 가리키게 하고 regex로 "
     "각각 뽑아라.\n"
     "- title 필드의 원본 텍스트가 org 필드와 중복되는 내용을 접두어/접미어로 포함하는 경우가 "
