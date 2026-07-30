@@ -1474,14 +1474,19 @@ def load_sample_items() -> List[Dict[str, Any]]:
     return json.loads(SAMPLE_PATH.read_text(encoding="utf-8"))
 
 
-def _apply_source_override(sub_cfg: Dict[str, Any], source_id: str, overrides: Dict[str, str]) -> Dict[str, Any]:
-    """관리자가 재정의한 URL이 있으면 해당 소스 설정의 list_url/list_urls를 덮어쓴다."""
-    url = overrides.get(source_id)
-    if not url:
+def _apply_source_override(sub_cfg: Dict[str, Any], source_id: str, overrides: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
+    """관리자가 재정의한 이름/URL/활성화 상태가 있으면 해당 소스 설정에 덮어쓴다."""
+    override = overrides.get(source_id)
+    if not override:
         return sub_cfg
     sub_cfg = dict(sub_cfg)
-    sub_cfg["list_url"] = url
-    sub_cfg["list_urls"] = [url]
+    if override.get("list_url"):
+        sub_cfg["list_url"] = override["list_url"]
+        sub_cfg["list_urls"] = [override["list_url"]]
+    if override.get("name"):
+        sub_cfg["name"] = override["name"]
+    if override.get("enabled") is not None:
+        sub_cfg["enabled"] = override["enabled"]
     return sub_cfg
 
 
@@ -1528,11 +1533,11 @@ def collect_all(write_db: bool = True) -> CollectRun:
         board_list_urls["kstartup"] = clean(kcfg.get("list_url") or KSTARTUP_DEFAULT_URL)
     if kcfg.get("enabled", False):
         try:
-            run.record("kstartup", collect_kstartup({**common, **kcfg})[:cap], "정상")
+            run.record("kstartup", collect_kstartup({**common, **kcfg})[:cap], "정상", name=kcfg.get("name"))
         except Exception as e:
-            run.record("kstartup", [], "오류", e)
+            run.record("kstartup", [], "오류", e, name=kcfg.get("name"))
     else:
-        run.record("kstartup", [], "비활성화")
+        run.record("kstartup", [], "비활성화", name=kcfg.get("name"))
 
     # Direct boards.
     for sid, raw_board_cfg in (cfg.get("boards") or {}).items():
@@ -1542,7 +1547,7 @@ def collect_all(write_db: bool = True) -> CollectRun:
         if clean(board_cfg.get("list_url")):
             board_list_urls[sid] = clean(board_cfg.get("list_url"))
         if not board_cfg.get("enabled", False):
-            run.record(sid, [], "비활성화")
+            run.record(sid, [], "비활성화", name=board_cfg.get("name"))
             continue
         try:
             if sid == "biohub_direct":
@@ -1564,6 +1569,29 @@ def collect_all(write_db: bool = True) -> CollectRun:
             run.record(sid, [], "차단(robots)", e, name=board_cfg.get("name"), method="게시판")
         except Exception as e:
             run.record(sid, [], "오류", e, name=board_cfg.get("name"), method="게시판")
+
+    # 관리자가 URL만으로 등록한 커스텀 소스 — 손으로 쓴 수집기 없이 저장된 레시피만으로
+    # 수집한다. board_list_urls에 등록해두면, 아래 이상 감지/복구 루프가 다른 게시판
+    # 소스와 똑같이 이 소스도 다뤄준다(레시피가 깨지면 재발견까지 자동으로 시도).
+    import recipe_engine  # 지연 임포트: recipe_engine이 collector를 임포트하므로 순환 방지
+
+    cs_model_id = (database.get_any_llm_preference() or {}).get("model_id") or llm.DEFAULT_MODEL_ID
+    cs_key_enc = database.get_any_llm_key_enc(llm.provider_of(cs_model_id))
+    cs_api_key = auth.decrypt_secret(cs_key_enc) if cs_key_enc else None
+    for cs in database.get_enabled_custom_sources():
+        sid = cs["id"]
+        board_list_urls[sid] = cs["list_url"]
+        stored = database.get_source_recipe(sid)
+        if not stored:
+            run.record(sid, [], "레시피 없음", name=cs["name"], method="레시피")
+            continue
+        try:
+            items = recipe_engine.run_recipe(sid, stored["recipe"], common, model_id=cs_model_id, api_key=cs_api_key)[:cap]
+            run.record(sid, items, "정상", name=cs["name"], method="레시피")
+        except PermissionError as e:
+            run.record(sid, [], "차단(robots)", e, name=cs["name"], method="레시피")
+        except Exception as e:
+            run.record(sid, [], "오류", e, name=cs["name"], method="레시피")
 
     run.items = merge_duplicate_notices(run.items)
     used_sample = False

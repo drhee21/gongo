@@ -10,6 +10,7 @@ import json
 import mimetypes
 import os
 import re
+import uuid
 from datetime import datetime
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -22,6 +23,7 @@ import ai_match
 import collector
 import database
 import llm
+import recipe_engine
 import uploads
 
 ROOT = Path(__file__).resolve().parent
@@ -275,17 +277,32 @@ class Handler(BaseHTTPRequestHandler):
                 cfg = collector.load_config()
                 overrides = database.get_source_overrides()
                 boards = cfg.get("boards") or {}
-                items = [
-                    {"source_id": sid, "name": name, "default_url": default_url, "override_url": overrides.get(sid)}
-                    for sid, name, default_url in [
-                        ("kstartup", "K-스타트업", (cfg.get("kstartup") or {}).get("list_url")),
-                        ("nrf", "한국연구재단", (boards.get("nrf") or {}).get("list_url")),
-                        ("kddf", "국가신약개발사업단", (boards.get("kddf") or {}).get("list_url")),
-                        ("biohub_direct", "서울바이오허브", (boards.get("biohub_direct") or {}).get("list_url")),
-                        ("khidi_direct", "보건산업진흥원/KHIDI", (boards.get("khidi_direct") or {}).get("list_url")),
-                    ]
-                ]
+                items = []
+                for sid, default_name, default_url, default_enabled in [
+                    ("kstartup", "K-스타트업", (cfg.get("kstartup") or {}).get("list_url"), (cfg.get("kstartup") or {}).get("enabled", False)),
+                    ("nrf", "한국연구재단", (boards.get("nrf") or {}).get("list_url"), (boards.get("nrf") or {}).get("enabled", False)),
+                    ("kddf", "국가신약개발사업단", (boards.get("kddf") or {}).get("list_url"), (boards.get("kddf") or {}).get("enabled", False)),
+                    ("biohub_direct", "서울바이오허브", (boards.get("biohub_direct") or {}).get("list_url"), (boards.get("biohub_direct") or {}).get("enabled", False)),
+                    ("khidi_direct", "보건산업진흥원/KHIDI", (boards.get("khidi_direct") or {}).get("list_url"), (boards.get("khidi_direct") or {}).get("enabled", False)),
+                ]:
+                    ov = overrides.get(sid) or {}
+                    items.append({
+                        "source_id": sid,
+                        "default_name": default_name,
+                        "name": ov.get("name") or default_name,
+                        "default_url": default_url,
+                        "override_url": ov.get("list_url"),
+                        "enabled": default_enabled if ov.get("enabled") is None else ov["enabled"],
+                        "enabled_is_override": ov.get("enabled") is not None,
+                    })
                 self.send_json({"ok": True, "items": items})
+                return
+            if path == "/api/admin/custom-sources":
+                user = current_user(self)
+                if not (user and user.get("is_admin")):
+                    self.send_json({"ok": False, "error": "관리자 권한이 필요합니다"}, status=403)
+                    return
+                self.send_json({"ok": True, "items": database.list_custom_sources()})
                 return
             if path == "/api/favorites":
                 user = current_user(self)
@@ -440,8 +457,264 @@ class Handler(BaseHTTPRequestHandler):
                     self.send_json({"ok": False, "error": "알 수 없는 소스입니다"}, status=400)
                     return
                 list_url = str(data.get("list_url") or "").strip()
-                database.set_source_override(source_id, list_url or None)
-                self.send_json({"ok": True, "source_id": source_id, "override_url": list_url or None})
+                name = str(data.get("name") or "").strip()
+                database.set_source_override(source_id, list_url or None, name or None)
+                self.send_json({"ok": True, "source_id": source_id, "override_url": list_url or None, "name": name or None})
+                return
+            if path == "/api/admin/source-overrides/toggle":
+                user = current_user(self)
+                if not (user and user.get("is_admin")):
+                    self.send_json({"ok": False, "error": "관리자 권한이 필요합니다"}, status=403)
+                    return
+                data = self.read_json()
+                source_id = str(data.get("source_id") or "").strip()
+                if source_id not in OVERRIDABLE_SOURCES:
+                    self.send_json({"ok": False, "error": "알 수 없는 소스입니다"}, status=400)
+                    return
+                database.set_source_enabled_override(source_id, bool(data.get("enabled")))
+                self.send_json({"ok": True, "source_id": source_id})
+                return
+            if path == "/api/admin/custom-sources/discover":
+                user = current_user(self)
+                if not (user and user.get("is_admin")):
+                    self.send_json({"ok": False, "error": "관리자 권한이 필요합니다"}, status=403)
+                    return
+                data = self.read_json()
+                name = str(data.get("name") or "").strip()
+                url = str(data.get("url") or "").strip()
+                existing_source_id = str(data.get("existing_source_id") or "").strip() or None
+                if not name or not url:
+                    self.send_json({"ok": False, "error": "이름과 URL을 모두 입력해주세요.", "code": "invalid_url"}, status=400)
+                    return
+                if not re.match(r"^https?://", url):
+                    self.send_json({"ok": False, "error": "http(s)://로 시작하는 URL을 입력해주세요.", "code": "invalid_url"}, status=400)
+                    return
+
+                editing = None
+                if existing_source_id:
+                    editing = database.get_custom_source(existing_source_id)
+                    if not editing:
+                        self.send_json({"ok": False, "error": "수정하려는 커스텀 소스를 찾을 수 없습니다.", "code": "invalid_url"}, status=400)
+                        return
+
+                cfg = collector.load_config()
+                # 이미 하드코딩된 소스(kstartup/boards)나 다른 커스텀 소스의 URL을 그대로 또
+                # 등록하면 같은 사이트가 두 소스로 중복 수집된다 — discover 단계에서 미리
+                # 막는다(수정 중인 소스 자기 자신의 기존 URL은 예외로 둔다).
+                existing_urls = {collector.clean((cfg.get("kstartup") or {}).get("list_url") or collector.KSTARTUP_DEFAULT_URL)}
+                for b in (cfg.get("boards") or {}).values():
+                    u = collector.clean(b.get("list_url") or "")
+                    if u:
+                        existing_urls.add(u)
+                existing_urls.update(
+                    collector.clean(ov["list_url"]) for ov in database.get_source_overrides().values() if ov.get("list_url")
+                )
+                existing_urls.update(
+                    collector.clean(cs["list_url"]) for cs in database.list_custom_sources()
+                    if cs["id"] != existing_source_id
+                )
+                if collector.clean(url) in existing_urls:
+                    self.send_json({"ok": False, "error": "이미 기존 소스가 사용 중인 URL입니다.", "code": "invalid_url"}, status=400)
+                    return
+
+                model_id = (database.get_user_setting(user["id"], "llm_preference", {}) or {}).get("model_id") or llm.DEFAULT_MODEL_ID
+                enc_key = resolve_llm_key_enc(user, llm.provider_of(model_id))
+                if not enc_key:
+                    self.send_json(
+                        {"ok": False, "error": "먼저 '회사 정보'에서 본인의 API 키를 등록해주세요.", "code": "no_llm_key"}, status=400
+                    )
+                    return
+                api_key = auth.decrypt_secret(enc_key)
+                common = cfg.get("common", {})
+
+                if common.get("respect_robots", True) and not collector.robots_allows(url):
+                    self.send_json({"ok": False, "error": "robots.txt에서 이 URL의 수집을 막고 있습니다.", "code": "robots_blocked"}, status=400)
+                    return
+                try:
+                    r = collector.SESSION.get(url, timeout=common.get("timeout_sec", 20))
+                    r.raise_for_status()
+                    if not r.encoding or r.encoding.lower() == "iso-8859-1":
+                        r.encoding = r.apparent_encoding
+                    sample = recipe_engine._strip_boilerplate_html(r.text)
+                except Exception as e:
+                    self.send_json({"ok": False, "error": f"페이지를 가져오지 못했습니다: {e}", "code": "fetch_failed"}, status=400)
+                    return
+
+                source_id = existing_source_id or ("custom_" + uuid.uuid4().hex[:10])
+                try:
+                    recipe = recipe_engine.discover_recipe_agentic(source_id, sample, url, "html", model_id, api_key, common)
+                except Exception as e:
+                    self.send_json({"ok": False, "error": f"레시피 발견에 실패했습니다: {e}", "code": "discovery_failed"}, status=400)
+                    return
+
+                try:
+                    items = recipe_engine.run_recipe(source_id, recipe, common, model_id=model_id, api_key=api_key)
+                except Exception as e:
+                    self.send_json({"ok": False, "error": f"발견된 레시피 실행에 실패했습니다: {e}", "code": "zero_items"}, status=400)
+                    return
+
+                warnings = []
+                if recipe.get("mode") == "llm_direct":
+                    warnings.append("이 레시피는 매 수집마다 LLM 호출이 필요합니다(mode=llm_direct) — 등록된 API 키가 없으면 수집이 실패합니다.")
+                sample_head = items[:10]
+                dup_title_count = sum(
+                    1 for it in sample_head if it.get("org") and it.get("title") and it["org"] in it["title"]
+                )
+                if sample_head and dup_title_count >= max(1, len(sample_head) // 2):
+                    warnings.append("제목에 기관명이 중복 포함된 것으로 보입니다 — 저장 전 레시피의 title 정규식을 확인해주세요.")
+                same_date_count = sum(
+                    1 for it in sample_head if it.get("start") and it.get("start") == it.get("end")
+                )
+                if sample_head and same_date_count >= max(1, len(sample_head) // 2):
+                    warnings.append(
+                        "시작일과 마감일이 대부분 똑같습니다 — 목록에 신청기간이 없어 게시일을 "
+                        "마감일로 착각했을 수 있습니다. 실제 신청기간은 상세 페이지에만 있을 수 있습니다."
+                    )
+
+                sample_items = [
+                    {"title": it.get("title"), "org": it.get("org"), "start": it.get("start"), "end": it.get("end"), "url": it.get("url")}
+                    for it in items[:20]
+                ]
+                self.send_json({
+                    "ok": True,
+                    "source_id": source_id,
+                    "name": name,
+                    "url": url,
+                    "category": (editing or {}).get("category"),
+                    "recipe": recipe,
+                    "item_count": len(items),
+                    "sample_items": sample_items,
+                    "warnings": warnings,
+                    "editing": bool(existing_source_id),
+                })
+                return
+            if path == "/api/admin/custom-sources/confirm":
+                user = current_user(self)
+                if not (user and user.get("is_admin")):
+                    self.send_json({"ok": False, "error": "관리자 권한이 필요합니다"}, status=403)
+                    return
+                data = self.read_json()
+                source_id = str(data.get("source_id") or "").strip()
+                name = str(data.get("name") or "").strip()
+                url = str(data.get("url") or "").strip()
+                category = data.get("category")
+                recipe = data.get("recipe")
+                if not (source_id and name and url and isinstance(recipe, dict)):
+                    self.send_json({"ok": False, "error": "필수 항목이 누락되었습니다.", "code": "invalid_recipe"}, status=400)
+                    return
+                # discover가 반환한 값을 그대로 다시 보내는 것이 정상 흐름이지만, 클라이언트가
+                # 보낸 값이므로(중간에서 조작되었거나 손상됐을 가능성) 저장 전 구조를 다시 검증한다.
+                fetch = recipe.get("fetch") or {}
+                field_map = recipe.get("field_map") or {}
+                valid = (
+                    isinstance(fetch.get("url"), str)
+                    and fetch.get("format") in ("html", "json", "xml")
+                    and isinstance(fetch.get("pagination"), dict)
+                    and isinstance(recipe.get("item_selector"), str)
+                    and all(k in field_map for k in ("title", "url", "org", "start", "end"))
+                    and recipe.get("mode") in ("structured", "llm_direct")
+                )
+                if not valid:
+                    self.send_json({"ok": False, "error": "레시피 형식이 올바르지 않습니다.", "code": "invalid_recipe"}, status=400)
+                    return
+
+                cfg = collector.load_config()
+                common = cfg.get("common", {})
+                model_id = None
+                api_key = None
+                if recipe.get("mode") == "llm_direct":
+                    model_id = (database.get_user_setting(user["id"], "llm_preference", {}) or {}).get("model_id") or llm.DEFAULT_MODEL_ID
+                    enc_key = resolve_llm_key_enc(user, llm.provider_of(model_id))
+                    if not enc_key:
+                        self.send_json(
+                            {"ok": False, "error": "먼저 '회사 정보'에서 본인의 API 키를 등록해주세요.", "code": "no_llm_key"}, status=400
+                        )
+                        return
+                    api_key = auth.decrypt_secret(enc_key)
+
+                # 미리보기 이후 사이트가 바뀌었을 수 있으므로, 저장 직전 한 번 더
+                # 실행해본다(재발견이 아니라 결정적 실행 1회라 비용이 거의 없다).
+                try:
+                    items = recipe_engine.run_recipe(source_id, recipe, common, model_id=model_id, api_key=api_key)
+                except Exception:
+                    self.send_json(
+                        {"ok": False, "error": "사이트 내용이 미리보기 이후 바뀐 것 같습니다. 다시 미리보기를 실행해주세요.", "code": "stale_preview"},
+                        status=400,
+                    )
+                    return
+
+                existing = database.get_custom_source(source_id)
+                database.set_source_recipe(source_id, recipe, verified_ok=True)
+                try:
+                    if existing:
+                        # URL/이름 수정 확정 — id는 그대로 두고 메타데이터만 갱신한다. 옛
+                        # URL/레시피로 모아둔 공고는 더 이상 유효하지 않으므로(즐겨찾기는
+                        # 보존) 지우고 새로 발견된 공고로 채운다.
+                        database.update_custom_source(source_id, name, url, category)
+                        database.delete_notices_by_source(source_id, spare_favorites=True)
+                    else:
+                        database.insert_custom_source(source_id, name, url, category, user["id"])
+                except Exception:
+                    # URL 중복(UNIQUE 제약) 등으로 등록/수정에 실패하면, 방금 저장한 레시피가
+                    # 고아로 남지 않도록 함께 정리한다(단, 기존 소스를 수정하던 중이었다면
+                    # 그 소스 자체는 지우지 않는다 — 레시피만 이전 상태로 되돌릴 방법이 없어
+                    # 다음 수정 시도에서 다시 덮어써질 뿐이므로 그대로 둔다).
+                    if not existing:
+                        database.delete_custom_source(source_id)
+                    self.send_json({"ok": False, "error": "이미 등록된 사이트이거나 저장에 실패했습니다.", "code": "duplicate"}, status=409)
+                    return
+
+                database.upsert_notices(items, prune=False)
+                database.replace_source_status({
+                    source_id: {"name": name, "method": "레시피", "state": "정상", "n": len(items), "last": database.now_iso()}
+                })
+                self.send_json({"ok": True, "source_id": source_id, "editing": bool(existing)})
+                return
+            if path == "/api/admin/custom-sources/rename":
+                # URL은 그대로 두고 이름만 바꾸는 경우 — 레시피가 그대로 유효하므로
+                # 재발견(비용이 드는 LLM 호출) 없이 곧바로 처리한다.
+                user = current_user(self)
+                if not (user and user.get("is_admin")):
+                    self.send_json({"ok": False, "error": "관리자 권한이 필요합니다"}, status=403)
+                    return
+                data = self.read_json()
+                source_id = str(data.get("source_id") or "").strip()
+                name = str(data.get("name") or "").strip()
+                if not source_id or not name:
+                    self.send_json({"ok": False, "error": "source_id와 name이 필요합니다"}, status=400)
+                    return
+                if not database.get_custom_source(source_id):
+                    self.send_json({"ok": False, "error": "커스텀 소스를 찾을 수 없습니다"}, status=404)
+                    return
+                database.rename_custom_source(source_id, name)
+                self.send_json({"ok": True})
+                return
+            if path == "/api/admin/custom-sources/toggle":
+                user = current_user(self)
+                if not (user and user.get("is_admin")):
+                    self.send_json({"ok": False, "error": "관리자 권한이 필요합니다"}, status=403)
+                    return
+                data = self.read_json()
+                source_id = str(data.get("source_id") or "").strip()
+                if not source_id:
+                    self.send_json({"ok": False, "error": "source_id가 필요합니다"}, status=400)
+                    return
+                database.set_custom_source_enabled(source_id, bool(data.get("enabled")))
+                self.send_json({"ok": True})
+                return
+            if path == "/api/admin/custom-sources/remove":
+                user = current_user(self)
+                if not (user and user.get("is_admin")):
+                    self.send_json({"ok": False, "error": "관리자 권한이 필요합니다"}, status=403)
+                    return
+                data = self.read_json()
+                source_id = str(data.get("source_id") or "").strip()
+                if not source_id:
+                    self.send_json({"ok": False, "error": "source_id가 필요합니다"}, status=400)
+                    return
+                database.delete_custom_source(source_id)
+                database.delete_notices_by_source(source_id, spare_favorites=True)
+                self.send_json({"ok": True})
                 return
             if path == "/api/favorite/toggle":
                 user = current_user(self)

@@ -185,6 +185,18 @@ def init_db() -> None:
                 verified_ok INTEGER DEFAULT 0
             );
 
+            CREATE TABLE IF NOT EXISTS custom_sources (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                list_url TEXT NOT NULL UNIQUE,
+                category TEXT,
+                enabled INTEGER DEFAULT 1,
+                created_by TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(created_by) REFERENCES users(id) ON DELETE SET NULL
+            );
+
             CREATE INDEX IF NOT EXISTS idx_notices_source ON notices(source);
             CREATE INDEX IF NOT EXISTS idx_notices_end ON notices(end_date);
             CREATE INDEX IF NOT EXISTS idx_notices_category ON notices(category);
@@ -196,6 +208,8 @@ def init_db() -> None:
         _ensure_column(con, "sources", "anomaly_note", "TEXT")
         _ensure_column(con, "notices", "dates_unknown", "INTEGER DEFAULT 0")
         _ensure_column(con, "notices", "rolling_confirmed", "INTEGER DEFAULT 0")
+        _ensure_column(con, "source_overrides", "name", "TEXT")
+        _ensure_column(con, "source_overrides", "enabled_override", "INTEGER")
 
 
 def upsert_notices(items: Iterable[Dict[str, Any]], prune: bool = True) -> int:
@@ -371,26 +385,52 @@ def flag_source_anomalies(statuses: Dict[str, Dict[str, Any]]) -> Dict[str, Dict
     return out
 
 
-def get_source_overrides() -> Dict[str, str]:
-    """관리자가 재정의한 소스별 수집 URL을 반환한다 ({source_id: list_url})."""
+def get_source_overrides() -> Dict[str, Dict[str, Any]]:
+    """관리자가 재정의한 소스별 이름/URL/활성화 상태를 반환한다
+    ({source_id: {"list_url":.., "name":.., "enabled":True/False/None}}).
+    enabled가 None이면 재정의가 없다는 뜻 — 설정 파일(config.json)의 기본값을 그대로 따른다."""
     init_db()
     with connect() as con:
         rows = con.execute(
-            "SELECT source_id, list_url FROM source_overrides WHERE list_url IS NOT NULL AND list_url != ''"
+            "SELECT source_id, list_url, name, enabled_override FROM source_overrides"
         ).fetchall()
-    return {r["source_id"]: r["list_url"] for r in rows}
+    out: Dict[str, Dict[str, Any]] = {}
+    for r in rows:
+        if not r["list_url"] and not r["name"] and r["enabled_override"] is None:
+            continue
+        out[r["source_id"]] = {
+            "list_url": r["list_url"] or None,
+            "name": r["name"] or None,
+            "enabled": None if r["enabled_override"] is None else bool(r["enabled_override"]),
+        }
+    return out
 
 
-def set_source_override(source_id: str, list_url: Optional[str]) -> None:
-    """소스 수집 URL을 재정의한다. list_url이 비어있으면 재정의를 해제한다."""
+def set_source_override(source_id: str, list_url: Optional[str], name: Optional[str] = None) -> None:
+    """소스 수집 URL/이름을 재정의한다. 둘 다 비어있으면 재정의를 해제한다.
+    활성화 여부 재정의는 set_source_enabled_override()로 별도 관리한다(토글 버튼이
+    이름/URL 수정과 별개 시점에 눌리므로, 이 함수는 enabled_override 컬럼을 건드리지 않는다)."""
     init_db()
     with connect() as con:
         con.execute(
             """
-            INSERT INTO source_overrides(source_id, list_url, updated_at) VALUES (?, ?, ?)
-            ON CONFLICT(source_id) DO UPDATE SET list_url=excluded.list_url, updated_at=excluded.updated_at
+            INSERT INTO source_overrides(source_id, list_url, name, updated_at) VALUES (?, ?, ?, ?)
+            ON CONFLICT(source_id) DO UPDATE SET list_url=excluded.list_url, name=excluded.name, updated_at=excluded.updated_at
             """,
-            (source_id, list_url or None, now_iso()),
+            (source_id, list_url or None, name or None, now_iso()),
+        )
+
+
+def set_source_enabled_override(source_id: str, enabled: Optional[bool]) -> None:
+    """소스 활성화 여부를 재정의한다. enabled=None이면 재정의를 지우고 설정 파일 기본값을 따른다."""
+    init_db()
+    with connect() as con:
+        con.execute(
+            """
+            INSERT INTO source_overrides(source_id, enabled_override, updated_at) VALUES (?, ?, ?)
+            ON CONFLICT(source_id) DO UPDATE SET enabled_override=excluded.enabled_override, updated_at=excluded.updated_at
+            """,
+            (source_id, None if enabled is None else (1 if enabled else 0), now_iso()),
         )
 
 
@@ -866,6 +906,135 @@ def set_source_recipe(source_id: str, recipe: Dict[str, Any], verified_ok: bool 
             """,
             (source_id, json.dumps(recipe, ensure_ascii=False), now_iso(), 1 if verified_ok else 0),
         )
+
+
+# ──────────────────────────── 커스텀 소스(관리자가 URL만으로 등록) ────────────────────────────
+# source_recipes는 레시피 본문 캐시일 뿐, 그 source_id가 애초에 존재한다는 사실 자체는
+# config.json의 boards나 코드에 하드코딩된 소스에 의존해왔다. custom_sources는 그 "존재"를
+# DB에 직접 갖는 소스를 위한 테이블이다 — 이름/URL/카테고리/활성화 여부만 갖고, 수집 결과
+# 상태(건수/최근 수집 시각/오류)는 기존 sources 테이블에 그대로 쌓인다(같은 id로 조인).
+
+def insert_custom_source(source_id: str, name: str, list_url: str, category: Optional[str], created_by: Optional[str]) -> None:
+    init_db()
+    ts = now_iso()
+    with connect() as con:
+        con.execute(
+            "INSERT INTO custom_sources(id, name, list_url, category, enabled, created_by, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, 1, ?, ?, ?)",
+            (source_id, name, list_url, category, created_by, ts, ts),
+        )
+
+
+def get_custom_source(source_id: str) -> Optional[Dict[str, Any]]:
+    init_db()
+    with connect() as con:
+        row = con.execute(
+            "SELECT id, name, list_url, category, enabled FROM custom_sources WHERE id=?", (source_id,)
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def update_custom_source(source_id: str, name: str, list_url: str, category: Optional[str]) -> None:
+    """URL 변경(재발견) 후 확정 시 기존 커스텀 소스 행을 그 자리에서 갱신한다 —
+    id를 그대로 유지해야 sources/notices의 기존 연결이 안 끊긴다."""
+    init_db()
+    with connect() as con:
+        con.execute(
+            "UPDATE custom_sources SET name=?, list_url=?, category=?, updated_at=? WHERE id=?",
+            (name, list_url, category, now_iso(), source_id),
+        )
+
+
+def rename_custom_source(source_id: str, name: str) -> None:
+    """URL은 그대로 두고 이름만 바꾼다 — 레시피가 그대로 유효하므로 재발견이 필요 없다.
+
+    sources(수집 결과 상태 캐시)의 name도 같이 갱신해서, 다음 수집 전에도 공고
+    목록의 소스 배지가 새 이름으로 바로 보이게 한다. replace_source_status()는
+    전체 행을 덮어써서 count/state/error가 기본값으로 초기화되므로 쓰지 않고,
+    name 컬럼만 직접 갱신한다(아직 한 번도 수집되지 않아 sources에 행이 없으면
+    조용히 no-op — 다음 수집 때 정상적으로 채워진다).
+    """
+    init_db()
+    with connect() as con:
+        con.execute(
+            "UPDATE custom_sources SET name=?, updated_at=? WHERE id=?",
+            (name, now_iso(), source_id),
+        )
+        con.execute("UPDATE sources SET name=? WHERE id=?", (name, source_id))
+
+
+def get_enabled_custom_sources() -> List[Dict[str, Any]]:
+    """collect_all()이 매 실행마다 도는, 활성화된 커스텀 소스 목록."""
+    init_db()
+    with connect() as con:
+        rows = con.execute(
+            "SELECT id, name, list_url, category FROM custom_sources WHERE enabled=1 ORDER BY created_at"
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def list_custom_sources() -> List[Dict[str, Any]]:
+    """관리자 화면용 — 상태(sources)와 레시피 검증 정보(source_recipes)까지 조인해서 반환한다."""
+    init_db()
+    with connect() as con:
+        rows = con.execute(
+            """
+            SELECT cs.id, cs.name, cs.list_url, cs.category, cs.enabled, cs.created_at,
+                   s.state, s.count, s.last_collected_at, s.error, s.anomaly, s.anomaly_note,
+                   sr.verified_ok, sr.discovered_at, sr.recipe_json
+            FROM custom_sources cs
+            LEFT JOIN sources s ON s.id = cs.id
+            LEFT JOIN source_recipes sr ON sr.source_id = cs.id
+            ORDER BY cs.created_at DESC
+            """
+        ).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        recipe_json = d.pop("recipe_json", None)
+        recipe_mode = None
+        if recipe_json:
+            try:
+                recipe_mode = json.loads(recipe_json).get("mode")
+            except Exception:
+                recipe_mode = None
+        d["recipe_mode"] = recipe_mode
+        out.append(d)
+    return out
+
+
+def set_custom_source_enabled(source_id: str, enabled: bool) -> None:
+    init_db()
+    with connect() as con:
+        con.execute(
+            "UPDATE custom_sources SET enabled=?, updated_at=? WHERE id=?",
+            (1 if enabled else 0, now_iso(), source_id),
+        )
+
+
+def delete_custom_source(source_id: str) -> None:
+    init_db()
+    with connect() as con:
+        con.execute("DELETE FROM custom_sources WHERE id=?", (source_id,))
+        con.execute("DELETE FROM source_recipes WHERE source_id=?", (source_id,))
+        con.execute("DELETE FROM sources WHERE id=?", (source_id,))
+
+
+def delete_notices_by_source(source_id: str, spare_favorites: bool = True) -> None:
+    """소스를 완전히 제거할 때(관리자 '삭제') 그 소스의 공고를 즉시 지운다.
+
+    upsert_notices(prune=True)의 "즐겨찾기된 공고는 지우지 않는다" 규칙과 동일하게,
+    누군가 즐겨찾기한 공고까지 함께 사라지지 않도록 기본으로 보호한다.
+    """
+    init_db()
+    with connect() as con:
+        if spare_favorites:
+            con.execute(
+                "DELETE FROM notices WHERE source=? AND id NOT IN (SELECT notice_id FROM favorites)",
+                (source_id,),
+            )
+        else:
+            con.execute("DELETE FROM notices WHERE source=?", (source_id,))
 
 
 def create_session(user_id: str, token: str, ttl_days: int = 30) -> None:

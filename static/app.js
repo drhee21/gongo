@@ -365,43 +365,258 @@ function renderAuthUI(){
   }
   updateApiKeyStatus();
   fillLlmPreference();
-  const overridesPanel = $('#adminOverridesPanel');
+  const sourcesPanel = $('#adminSourcesPanel');
   if(currentUserState?.is_admin){
-    overridesPanel?.classList.remove('hidden');
-    loadSourceOverrides();
+    sourcesPanel?.classList.remove('hidden');
+    loadAllSources();
   } else {
-    overridesPanel?.classList.add('hidden');
+    sourcesPanel?.classList.add('hidden');
   }
 }
 
-async function loadSourceOverrides(){
-  const el = $('#sourceOverridesTable');
+// ── 소스 관리(관리자): 기존 하드코딩 소스 + 커스텀 소스를 한 목록에 같이 보여준다 ──
+// 발견된 레시피는 확정 전까지 서버에 저장하지 않는다 — 확정 버튼을 누를 때 이 값을
+// 그대로 다시 서버에 보낸다(재발견 없이). 취소하면 그냥 이 값을 비우고 끝난다.
+let pendingCustomSource = null;
+// 소스의 이름/URL을 고치는 중이면 그 소스의 id/원래 값/종류를 들고 있는다.
+// kind가 'custom'(레시피 기반 커스텀 소스)이면: URL을 안 바꿨으면(이름만 바꿈)
+// 재발견 없이 이름만 바로 바꾸고, URL을 바꿨으면 새로 등록할 때와 같은 미리보기
+// 절차를 거치되 새 소스가 아니라 이 소스를 갱신한다.
+// kind가 'override'(K-스타트업/NRF 등 기존 하드코딩 소스)이면: 이 소스들은 아직
+// AI 레시피가 아니라 전용 수집기를 쓰므로, 이름/URL 중 뭘 바꿔도 재발견 없이
+// 항상 바로 저장한다(전용 수집기가 새 URL에서도 같은 구조를 기대할 뿐).
+let editingCustomSource = null; // {id, originalUrl, originalName, kind}
+
+async function loadAllSources(){
+  const el = $('#allSourcesTable');
   if(!el) return;
   try{
-    const res = await api('/api/admin/source-overrides');
-    const items = res.items || [];
-    el.innerHTML = items.map(s => `
-      <div class="override-row" data-source="${esc(s.source_id)}">
-        <div class="override-label">${esc(s.name)}</div>
-        <div class="override-current">기본값: ${esc(s.default_url || '(없음)')}</div>
-        <input type="text" class="override-input" placeholder="재정의할 URL (비우면 기본값 사용)" value="${esc(s.override_url || '')}" />
-        <button type="button" class="button override-save">저장</button>
+    const [overridesRes, customRes] = await Promise.all([
+      api('/api/admin/source-overrides'),
+      api('/api/admin/custom-sources'),
+    ]);
+    const hardcoded = (overridesRes.items || []).map(s => `
+      <div class="custom-source-row" data-source="${esc(s.source_id)}" data-kind="override">
+        <div class="custom-source-info">
+          <div><strong>${esc(s.name)}</strong> <span class="badge-warn" style="background:rgba(0,0,0,.06);color:var(--muted)">기존 소스</span>${s.enabled ? '' : '<span class="badge-warn">비활성</span>'}</div>
+          <div class="custom-source-url">${esc(s.override_url || s.default_url || '(없음)')}${s.override_url ? ' <span class="meta">(기본값 재정의됨)</span>' : ''}</div>
+        </div>
+        <div class="custom-source-actions">
+          <button type="button" class="button override-source-edit">수정</button>
+          <button type="button" class="button override-source-toggle">${s.enabled ? '비활성화' : '활성화'}</button>
+        </div>
       </div>
-    `).join('') || '<p class="meta">재정의 가능한 소스가 없습니다.</p>';
-    el.querySelectorAll('.override-save').forEach(btn=>{
-      btn.addEventListener('click', async ()=>{
-        const row = btn.closest('.override-row');
+    `).join('');
+    const custom = (customRes.items || []).map(s => `
+      <div class="custom-source-row" data-source="${esc(s.id)}" data-kind="custom">
+        <div class="custom-source-info">
+          <div><strong>${esc(s.name)}</strong> ${s.enabled ? '' : '<span class="badge-warn">비활성</span>'}${s.anomaly ? `<span class="badge-warn" title="${esc(s.anomaly_note||'')}">⚠ 이상감지</span>` : ''}${s.recipe_mode === 'llm_direct' ? '<span class="badge-warn" title="매 수집마다 LLM 호출이 필요합니다">⚡ llm_direct</span>' : ''}</div>
+          <div class="custom-source-url">${esc(s.list_url)}</div>
+          <div class="meta">${esc(s.state || '미확인')} · ${esc(Number(s.count)||0)}건 ${s.last_collected_at ? '· ' + esc(s.last_collected_at) : ''}</div>
+        </div>
+        <div class="custom-source-actions">
+          <button type="button" class="button custom-source-edit">수정</button>
+          <button type="button" class="button custom-source-toggle">${s.enabled ? '비활성화' : '활성화'}</button>
+          <button type="button" class="button custom-source-remove">삭제</button>
+        </div>
+      </div>
+    `).join('');
+    el.innerHTML = hardcoded + custom || '<p class="meta">소스가 없습니다.</p>';
+
+    el.querySelectorAll('.override-source-edit').forEach(btn=>{
+      btn.addEventListener('click', ()=>{
+        const row = btn.closest('.custom-source-row');
         const source_id = row.dataset.source;
-        const list_url = row.querySelector('.override-input').value.trim();
+        const item = (overridesRes.items || []).find(s => s.source_id === source_id);
+        if(!item) return;
+        startEditingSource({id: source_id, originalUrl: item.override_url || item.default_url || '', originalName: item.name, kind: 'override'});
+      });
+    });
+    el.querySelectorAll('.override-source-toggle').forEach(btn=>{
+      btn.addEventListener('click', async ()=>{
+        const row = btn.closest('.custom-source-row');
+        const source_id = row.dataset.source;
+        const item = (overridesRes.items || []).find(s => s.source_id === source_id);
+        const enabling = !(item && item.enabled);
         try{
-          await api('/api/admin/source-overrides', {method:'POST', body:JSON.stringify({source_id, list_url})});
-          toast(list_url ? '재정의 저장 완료' : '재정의 해제 완료', 'success');
-          loadSourceOverrides();
+          await api('/api/admin/source-overrides/toggle', {method:'POST', body:JSON.stringify({source_id, enabled: enabling})});
+          toast(enabling ? '활성화 완료' : '비활성화 완료', 'success');
+          loadAllSources();
+          await loadAll();
+        }catch(err){ toast(err.message, 'error'); }
+      });
+    });
+    el.querySelectorAll('.custom-source-edit').forEach(btn=>{
+      btn.addEventListener('click', ()=>{
+        const row = btn.closest('.custom-source-row');
+        const source_id = row.dataset.source;
+        const item = (customRes.items || []).find(s => s.id === source_id);
+        if(!item) return;
+        startEditingSource({id: source_id, originalUrl: item.list_url, originalName: item.name, kind: 'custom'});
+      });
+    });
+    el.querySelectorAll('.custom-source-toggle').forEach(btn=>{
+      btn.addEventListener('click', async ()=>{
+        const row = btn.closest('.custom-source-row');
+        const source_id = row.dataset.source;
+        const enabling = btn.textContent === '활성화';
+        try{
+          await api('/api/admin/custom-sources/toggle', {method:'POST', body:JSON.stringify({source_id, enabled: enabling})});
+          toast(enabling ? '활성화 완료' : '비활성화 완료', 'success');
+          loadAllSources();
+        }catch(err){ toast(err.message, 'error'); }
+      });
+    });
+    el.querySelectorAll('.custom-source-remove').forEach(btn=>{
+      btn.addEventListener('click', async ()=>{
+        const row = btn.closest('.custom-source-row');
+        const source_id = row.dataset.source;
+        if(!confirm('정말 삭제하시겠습니까? 수집된 공고도 함께 삭제됩니다(즐겨찾기한 공고는 남습니다).')) return;
+        try{
+          await api('/api/admin/custom-sources/remove', {method:'POST', body:JSON.stringify({source_id})});
+          toast('삭제 완료', 'success');
+          if(editingCustomSource?.id === source_id) editingCustomSource = null;
+          loadAllSources();
+          await loadAll();
         }catch(err){ toast(err.message, 'error'); }
       });
     });
   }catch(err){ el.innerHTML = `<p class="meta">${esc(err.message)}</p>`; }
 }
+
+function clearCustomSourceForm(){
+  editingCustomSource = null;
+  $('#customSourceEditBanner')?.classList.add('hidden');
+  $('#customSourceName').value = '';
+  $('#customSourceUrl').value = '';
+}
+
+function startEditingSource({id, originalUrl, originalName, kind}){
+  editingCustomSource = {id, originalUrl, originalName, kind};
+  $('#customSourceName').value = originalName;
+  $('#customSourceUrl').value = originalUrl;
+  const banner = $('#customSourceEditBanner');
+  if(banner){
+    banner.classList.remove('hidden');
+    const hint = kind === 'override'
+      ? '이 소스는 아직 전용 수집기를 사용합니다 — 이름/URL을 바꾸고 저장하면 재발견 없이 바로 적용됩니다.'
+      : 'URL을 바꾸면 다시 미리보기를 거쳐야 합니다.';
+    banner.innerHTML = `"${esc(originalName)}" 수정 중 — ${hint} <a href="#" id="btnCancelEditCustomSource">취소</a>`;
+    $('#btnCancelEditCustomSource')?.addEventListener('click', (e)=>{
+      e.preventDefault();
+      clearCustomSourceForm();
+    });
+  }
+  $('#customSourceName')?.scrollIntoView({behavior:'smooth', block:'center'});
+}
+
+function renderCustomSourcePreview(){
+  const el = $('#customSourcePreview');
+  if(!el) return;
+  if(!pendingCustomSource){
+    el.classList.add('hidden');
+    el.innerHTML = '';
+    return;
+  }
+  const p = pendingCustomSource;
+  const warningsHtml = (p.warnings && p.warnings.length)
+    ? `<ul class="warning-list">${p.warnings.map(w=>`<li>${esc(w)}</li>`).join('')}</ul>`
+    : '';
+  const rowsHtml = (p.sample_items || []).map(it => `
+    <tr>
+      <td>${esc(it.title||'')}</td>
+      <td>${esc(it.org||'')}</td>
+      <td>${esc(it.start||'')} ~ ${esc(it.end||'')}</td>
+      <td>${esc(it.url||'')}</td>
+    </tr>
+  `).join('');
+  el.className = 'custom-source-preview';
+  el.innerHTML = `
+    <p><strong>${esc(p.name)}</strong> — 총 ${esc(p.item_count)}건 발견</p>
+    ${warningsHtml}
+    <table>
+      <thead><tr><th>제목</th><th>기관</th><th>기간</th><th>URL</th></tr></thead>
+      <tbody>${rowsHtml}</tbody>
+    </table>
+    <details><summary>레시피 원본 보기</summary><pre>${esc(JSON.stringify(p.recipe, null, 2))}</pre></details>
+    <div class="preview-actions">
+      <button type="button" class="primary" id="btnConfirmCustomSource">${p.editing ? '확정 (변경사항 반영)' : '확정 (수집에 반영)'}</button>
+      <button type="button" class="button" id="btnCancelCustomSource">취소</button>
+    </div>
+  `;
+  $('#btnConfirmCustomSource')?.addEventListener('click', async ()=>{
+    const btn = $('#btnConfirmCustomSource');
+    btn.disabled = true;
+    try{
+      await api('/api/admin/custom-sources/confirm', {method:'POST', body:JSON.stringify(pendingCustomSource)});
+      toast(pendingCustomSource.editing ? '수정 완료' : '등록 완료 — 이후부터 자동으로 수집됩니다', 'success');
+      pendingCustomSource = null;
+      clearCustomSourceForm();
+      renderCustomSourcePreview();
+      loadAllSources();
+      await loadAll();
+    }catch(err){
+      toast(err.message, 'error');
+      btn.disabled = false;
+    }
+  });
+  $('#btnCancelCustomSource')?.addEventListener('click', ()=>{
+    pendingCustomSource = null;
+    renderCustomSourcePreview();
+  });
+}
+
+$('#btnDiscoverCustomSource')?.addEventListener('click', async ()=>{
+  const nameEl = $('#customSourceName');
+  const urlEl = $('#customSourceUrl');
+  const name = nameEl?.value.trim();
+  const url = urlEl?.value.trim();
+  if(!name || !url){ toast('이름과 URL을 모두 입력해주세요.', 'error'); return; }
+
+  // 기존 하드코딩 소스(K-스타트업/NRF 등)는 아직 전용 수집기를 쓰므로 이름/URL 중
+  // 뭘 바꿔도 재발견 없이 항상 바로 저장한다.
+  if(editingCustomSource?.kind === 'override'){
+    try{
+      await api('/api/admin/source-overrides', {method:'POST', body:JSON.stringify({source_id: editingCustomSource.id, list_url: url, name})});
+      toast('수정 내용 저장 완료', 'success');
+      clearCustomSourceForm();
+      loadAllSources();
+      await loadAll();
+    }catch(err){ toast(err.message, 'error'); }
+    return;
+  }
+
+  // 커스텀 소스를 수정 중이고 URL을 안 바꿨으면(이름만 바꿈) 재발견 없이 바로 이름만
+  // 바꾼다 — 레시피는 그대로 유효하므로 LLM 호출을 아낄 수 있다.
+  if(editingCustomSource && url === editingCustomSource.originalUrl){
+    try{
+      await api('/api/admin/custom-sources/rename', {method:'POST', body:JSON.stringify({source_id: editingCustomSource.id, name})});
+      toast('이름 수정 완료', 'success');
+      clearCustomSourceForm();
+      loadAllSources();
+      await loadAll();
+    }catch(err){ toast(err.message, 'error'); }
+    return;
+  }
+
+  const btn = $('#btnDiscoverCustomSource');
+  btn.disabled = true;
+  btn.dataset.originalText = btn.textContent;
+  btn.textContent = '분석 중... (최대 1~2분)';
+  try{
+    const body = {name, url};
+    if(editingCustomSource) body.existing_source_id = editingCustomSource.id;
+    const res = await api('/api/admin/custom-sources/discover', {method:'POST', body:JSON.stringify(body)});
+    pendingCustomSource = res;
+    renderCustomSourcePreview();
+    toast('미리보기 준비 완료 — 확인 후 확정해주세요', 'success');
+  }catch(err){
+    toast(err.message, 'error');
+  }finally{
+    btn.disabled = false;
+    btn.textContent = btn.dataset.originalText || '저장';
+  }
+});
 
 function updateApiKeyStatus(){
   const bizEl = $('#bizinfoKeyStatus');
