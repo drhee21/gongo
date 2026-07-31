@@ -78,8 +78,8 @@ const TRANSLATIONS = {
     fileSelectLabel: '파일 선택',
     btnUpload: '업로드',
 
-    llmModelTitle: 'AI 맞춤 분석 모델',
-    llmModelDesc: 'AI 맞춤 분석에 사용할 모델과 API 키를 설정합니다. 키는 암호화되어 저장되고 화면에는 다시 표시되지 않습니다.',
+    llmModelTitle: 'AI 모델 및 API 키',
+    llmModelDesc: 'AI 맞춤 분석, 신규 수집 사이트 분석 등에 쓰이는 모델과 API 키를 설정합니다. 키는 암호화되어 저장되고 화면에는 다시 표시되지 않습니다.',
     modelLabel: '모델',
     llmKeyLabel: 'LLM API 키',
     llmKeyPlaceholder: '비워두면 변경 없음',
@@ -309,8 +309,8 @@ const TRANSLATIONS = {
     fileSelectLabel: 'Select Files',
     btnUpload: 'Upload',
 
-    llmModelTitle: 'AI Fit Analysis Model',
-    llmModelDesc: 'Set the model and API key used for AI fit analysis. Keys are stored encrypted and never shown again.',
+    llmModelTitle: 'AI Model & API Key',
+    llmModelDesc: 'Set the model and API key used for AI fit analysis, new source discovery, and other AI features. Keys are stored encrypted and never shown again.',
     modelLabel: 'Model',
     llmKeyLabel: 'LLM API Key',
     llmKeyPlaceholder: 'Leave blank to keep unchanged',
