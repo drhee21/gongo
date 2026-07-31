@@ -528,6 +528,9 @@ def parse_kstartup_html_items(html: str, page_url: str, max_items: int = 80) -> 
 def collect_kstartup(cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
     """K-Startup 모집중 웹페이지 HTML 직접 크롤링.
 
+    더 이상 collect_all()이 평시 수집에 쓰지 않는다(_collect_via_stored_recipe()로
+    대체됨) — 만일을 위해 코드만 남겨뒀다.
+
     API 키를 사용하지 않는다. 기본 URL은
     https://www.k-startup.go.kr/web/contents/bizpbanc-ongoing.do 이다.
 
@@ -711,6 +714,8 @@ def collect_board(source_id: str, bcfg: Dict[str, Any], common: Dict[str, Any]) 
 
 
 def collect_kddf(bcfg: Dict[str, Any], common: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """더 이상 collect_all()이 평시 수집에 쓰지 않는다(_collect_via_stored_recipe()로
+    대체됨) — 만일을 위해 코드만 남겨뒀다."""
     if not bcfg.get("enabled", False):
         raise RuntimeError("비활성화됨")
     list_url = clean(bcfg.get("list_url"))
@@ -1034,6 +1039,8 @@ def parse_iris_list_items(html: str) -> List[Dict[str, Any]]:
 
 
 def collect_nrf_iris(bcfg: Dict[str, Any], common: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """더 이상 collect_all()이 평시 수집에 쓰지 않는다(_collect_via_stored_recipe()로
+    대체됨) — 만일을 위해 코드만 남겨뒀다."""
     if not bcfg.get("enabled", False):
         raise RuntimeError("비활성화됨")
     list_url = clean(bcfg.get("list_url"))
@@ -1484,6 +1491,22 @@ def load_sample_items() -> List[Dict[str, Any]]:
     return json.loads(SAMPLE_PATH.read_text(encoding="utf-8"))
 
 
+def _collect_via_stored_recipe(source_id: str, common: Dict[str, Any], cap: int) -> List[Dict[str, Any]]:
+    """kstartup/kddf/nrf의 평시 수집 경로 — 예전에 검증해둔 손으로 쓴 파서 대신, 이미
+    저장된 레시피를 선택자만으로 결정적으로 재실행한다(LLM 호출 없음). 레시피가 없거나
+    실행이 깨지면 여기서 예외를 던져 호출부가 "오류"로 기록하게 하고, 그 뒤 이상 감지
+    로직이 recover_source_via_recipe()로 자동 복구를 시도한다 — 손으로 쓴 파서는 그
+    복구 경로에서도 더 이상 쓰지 않는다(collector.py의 collect_kstartup/collect_kddf/
+    collect_nrf_iris 함수 자체는 참고용으로 남겨뒀을 뿐, collect_all()이 더 이상
+    호출하지 않는다)."""
+    import recipe_engine
+
+    stored = database.get_source_recipe(source_id)
+    if not stored:
+        raise RuntimeError("레시피 없음")
+    return recipe_engine.run_recipe(source_id, stored["recipe"], common)[:cap]
+
+
 def _apply_source_override(sub_cfg: Dict[str, Any], source_id: str, overrides: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
     """관리자가 재정의한 이름/URL/활성화 상태가 있으면 해당 소스 설정에 덮어쓴다."""
     override = overrides.get(source_id)
@@ -1543,7 +1566,8 @@ def collect_all(write_db: bool = True) -> CollectRun:
         board_list_urls["kstartup"] = clean(kcfg.get("list_url") or KSTARTUP_DEFAULT_URL)
     if kcfg.get("enabled", False):
         try:
-            run.record("kstartup", collect_kstartup({**common, **kcfg})[:cap], "정상", name=kcfg.get("name"))
+            items = _collect_via_stored_recipe("kstartup", common, cap)
+            run.record("kstartup", items, "정상", name=kcfg.get("name"), method="레시피")
         except Exception as e:
             run.record("kstartup", [], "오류", e, name=kcfg.get("name"))
     else:
@@ -1564,11 +1588,11 @@ def collect_all(write_db: bool = True) -> CollectRun:
                 items = collect_biohub_direct(board_cfg, common)[:cap]
                 run.record(sid, items, "정상", name=board_cfg.get("name") or "서울바이오허브(직접)", method="전용 파서")
             elif sid == "nrf":
-                items = collect_nrf_iris(board_cfg, common)[:cap]
-                run.record(sid, items, "정상", name=board_cfg.get("name") or "한국연구재단", method="IRIS 경유")
+                items = _collect_via_stored_recipe(sid, common, cap)
+                run.record(sid, items, "정상", name=board_cfg.get("name") or "한국연구재단", method="레시피")
             elif sid == "kddf":
-                items = collect_kddf(board_cfg, common)[:cap]
-                run.record(sid, items, "정상", name=board_cfg.get("name") or "국가신약개발사업단", method="전용 파서")
+                items = _collect_via_stored_recipe(sid, common, cap)
+                run.record(sid, items, "정상", name=board_cfg.get("name") or "국가신약개발사업단", method="레시피")
             elif sid == "khidi_direct":
                 items = collect_khidi_direct(board_cfg, common)[:cap]
                 run.record(sid, items, "정상", name=board_cfg.get("name") or "보건산업진흥원/KHIDI", method="전용 파서(API)")

@@ -529,12 +529,12 @@ SOURCE_ALIASES = {
 }
 
 SOURCE_META = {
-    "kstartup": {"name": "K-스타트업", "method": "HTML"},
+    "kstartup": {"name": "K-스타트업", "method": "레시피"},
     "bizinfo": {"name": "기업마당", "method": "API"},
     "biohub": {"name": "서울바이오허브", "method": "직접/기업마당"},
     "khidi": {"name": "보건산업진흥원/KHIDI", "method": "직접/기업마당"},
-    "kddf": {"name": "국가신약개발사업단", "method": "게시판"},
-    "nrf": {"name": "한국연구재단", "method": "게시판"},
+    "kddf": {"name": "국가신약개발사업단", "method": "레시피"},
+    "nrf": {"name": "한국연구재단", "method": "레시피"},
     "g2b": {"name": "나라장터", "method": "API"},
     "sample": {"name": "샘플", "method": "내장 데이터"},
 }
