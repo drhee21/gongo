@@ -11,32 +11,36 @@
     <div class="brand">
       <div class="logo">공</div>
       <div>
-        <div class="brand-title">공고모아</div>
-        <div class="brand-sub">정부지원사업 통합 조회</div>
+        <div class="brand-title" data-i18n="brandTitle">공고모아</div>
+        <div class="brand-sub" data-i18n="brandSub">정부지원사업 통합 조회</div>
       </div>
     </div>
     <nav>
-      <button class="nav active" data-view="list">공고 목록</button>
-      <button class="nav" data-view="fav">관심 공고</button>
-      <button class="nav" data-view="cal">캘린더</button>
-      <button class="nav" data-view="company">회사 정보</button>
-      <button class="nav" data-view="admin">관리자</button>
+      <button class="nav active" data-view="list" data-i18n="navList">공고 목록</button>
+      <button class="nav" data-view="fav" data-i18n="navFav">관심 공고</button>
+      <button class="nav" data-view="cal" data-i18n="navCal">캘린더</button>
+      <button class="nav" data-view="company" data-i18n="navCompany">회사 정보</button>
+      <button class="nav" data-view="admin" data-i18n="navAdmin">관리자</button>
     </nav>
+    <div class="sidebox lang-switch">
+      <button type="button" class="lang-btn" data-lang-btn="ko" data-i18n="langKo">한국어</button>
+      <button type="button" class="lang-btn" data-lang-btn="en" data-i18n="langEn">EN</button>
+    </div>
     <div class="sidebox account-box">
       <div id="accountLoggedOut">
-        <button id="btnOpenLogin" class="button" style="width:100%" type="button">로그인 / 가입</button>
+        <button id="btnOpenLogin" class="button" style="width:100%" type="button" data-i18n="loginSignup">로그인 / 가입</button>
       </div>
       <div id="accountLoggedIn" class="hidden">
         <div class="account-email" id="accountEmail"></div>
-        <button id="btnLogout" class="button" style="width:100%" type="button">로그아웃</button>
+        <button id="btnLogout" class="button" style="width:100%" type="button" data-i18n="logout">로그아웃</button>
       </div>
     </div>
     <div class="sidebox hidden" id="aiFitMiniBox">
-      <div class="sidebox-title">AI 적합도</div>
+      <div class="sidebox-title" data-i18n="aiFitTitle">AI 적합도</div>
       <div id="aiFitMini"></div>
     </div>
     <div class="sidebox">
-      <div class="sidebox-title">수집 상태</div>
+      <div class="sidebox-title" data-i18n="collectionStatusTitle">수집 상태</div>
       <div id="sourceMini"></div>
     </div>
   </aside>
@@ -44,13 +48,13 @@
   <div id="authModal" class="modal-overlay hidden">
     <div class="modal">
       <button id="authModalClose" class="modal-close" type="button">✕</button>
-      <h2 id="authModalTitle">로그인</h2>
+      <h2 id="authModalTitle" data-i18n="authTitleLogin">로그인</h2>
       <form id="authForm" class="form-grid">
-        <label class="wide">이메일<input type="email" name="email" required /></label>
-        <label class="wide">비밀번호<input type="password" name="password" required minlength="8" /></label>
-        <button id="authSubmit" class="primary wide" type="submit">로그인</button>
+        <label class="wide"><span data-i18n="emailLabel">이메일</span><input type="email" name="email" required /></label>
+        <label class="wide"><span data-i18n="passwordLabel">비밀번호</span><input type="password" name="password" required minlength="8" /></label>
+        <button id="authSubmit" class="primary wide" type="submit" data-i18n="authSubmitLogin">로그인</button>
       </form>
-      <p class="modal-switch"><span id="authSwitchLabel">계정이 없으신가요?</span> <a href="#" id="authSwitchMode">가입하기</a></p>
+      <p class="modal-switch"><span id="authSwitchLabel" data-i18n="authSwitchToSignup">계정이 없으신가요?</span> <a href="#" id="authSwitchMode" data-i18n="authSwitchLinkSignup">가입하기</a></p>
     </div>
   </div>
 
@@ -58,54 +62,54 @@
     <section id="view-list" class="view active">
       <header class="topbar">
         <div>
-          <h1>공고 목록</h1>
-          <p>K-스타트업 · 기업마당 · 서울바이오허브 · KHIDI · NRF · KDDF · 나라장터</p>
+          <h1 data-i18n="listTitle">공고 목록</h1>
+          <p data-i18n="listSubtitle">K-스타트업 · 기업마당 · 서울바이오허브 · KHIDI · NRF · KDDF · 나라장터</p>
         </div>
         <div class="actions">
-          <button id="btnCollect" class="primary">업데이트</button>
+          <button id="btnCollect" class="primary" data-i18n="btnUpdate">업데이트</button>
           <a class="button" href="/api/export.csv">CSV</a>
         </div>
       </header>
 
       <div class="kpis">
-        <div class="kpi"><span>전체</span><b id="kpiTotal">-</b></div>
-        <div class="kpi"><span>접수중</span><b id="kpiOpen">-</b></div>
-        <div class="kpi"><span>D-7 이내</span><b id="kpiUrgent">-</b></div>
-        <div class="kpi"><span>관심</span><b id="kpiFav">-</b></div>
+        <div class="kpi"><span data-i18n="kpiTotal">전체</span><b id="kpiTotal">-</b></div>
+        <div class="kpi"><span data-i18n="kpiOpen">접수중</span><b id="kpiOpen">-</b></div>
+        <div class="kpi"><span data-i18n="kpiUrgent">D-7 이내</span><b id="kpiUrgent">-</b></div>
+        <div class="kpi"><span data-i18n="kpiFav">관심</span><b id="kpiFav">-</b></div>
       </div>
 
       <div class="filters">
-        <input id="q" placeholder="검색: 바이오, R&D, 서울, 수출..." />
-        <select id="sourceFilter"><option value="">전체 소스</option></select>
+        <input id="q" data-i18n-placeholder="searchPlaceholder" placeholder="검색: 바이오, R&D, 서울, 수출..." />
+        <select id="sourceFilter"><option value="" data-i18n="optAllSources">전체 소스</option></select>
         <select id="statusFilter">
-          <option value="open">접수 가능</option>
-          <option value="all">전체</option>
-          <option value="urgent">마감임박</option>
-          <option value="closed">마감</option>
+          <option value="open" data-i18n="optStatusOpen">접수 가능</option>
+          <option value="all" data-i18n="optStatusAll">전체</option>
+          <option value="urgent" data-i18n="optStatusUrgent">마감임박</option>
+          <option value="closed" data-i18n="optStatusClosed">마감</option>
         </select>
         <select id="aiFitFilter">
-          <option value="">전체</option>
-          <option value="fit">적합</option>
-          <option value="unfit">부적합</option>
-          <option value="unsure">확인</option>
+          <option value="" data-i18n="optAiFitAll">전체</option>
+          <option value="fit" data-i18n="aiFitFit">적합</option>
+          <option value="unfit" data-i18n="aiFitUnfit">부적합</option>
+          <option value="unsure" data-i18n="aiFitUnsure">확인</option>
         </select>
       </div>
       <div id="noticeList" class="list"></div>
     </section>
 
     <section id="view-fav" class="view">
-      <header class="topbar"><div><h1>관심 공고</h1><p>별표를 누른 공고만 모아봅니다.</p></div></header>
+      <header class="topbar"><div><h1 data-i18n="favTitle">관심 공고</h1><p data-i18n="favSubtitle">별표를 누른 공고만 모아봅니다.</p></div></header>
       <div id="favList" class="list"></div>
     </section>
 
     <section id="view-cal" class="view">
       <header class="topbar">
-        <div><h1>마감 캘린더</h1><p>마감일 기준으로 이번 달 공고를 달력으로 보여줍니다.</p></div>
+        <div><h1 data-i18n="calTitle">마감 캘린더</h1><p data-i18n="calSubtitle">마감일 기준으로 이번 달 공고를 달력으로 보여줍니다.</p></div>
         <div class="cal-nav">
           <button id="calPrev" class="button" type="button">‹</button>
           <span id="calMonthLabel" class="cal-month-label"></span>
           <button id="calNext" class="button" type="button">›</button>
-          <button id="calToday" class="button" type="button">오늘</button>
+          <button id="calToday" class="button" type="button" data-i18n="calToday">오늘</button>
         </div>
       </header>
       <div id="calendarGrid" class="cal-grid"></div>
@@ -113,134 +117,135 @@
     </section>
 
     <section id="view-company" class="view">
-      <header class="topbar"><div><h1>회사 정보</h1><p>공고 적합도 필터링을 위한 기본 정보입니다.</p></div></header>
+      <header class="topbar"><div><h1 data-i18n="companyTitle">회사 정보</h1><p data-i18n="companySubtitle">공고 적합도 필터링을 위한 기본 정보입니다.</p></div></header>
       <div id="companyLoginRequired" class="panel hidden">
-        <p>회사 정보 저장과 AI 맞춤 분석은 로그인 후 이용할 수 있습니다.</p>
-        <button id="btnCompanyLogin" class="primary" type="button">로그인 / 가입</button>
+        <p data-i18n="companyLoginRequiredText">회사 정보 저장과 AI 맞춤 분석은 로그인 후 이용할 수 있습니다.</p>
+        <button id="btnCompanyLogin" class="primary" type="button" data-i18n="loginSignup">로그인 / 가입</button>
       </div>
       <div id="companyLoggedInArea">
         <form id="companyForm" class="panel form-grid">
-          <label>회사명<input name="name" placeholder="예: ABC Bio" /></label>
-          <label>업력(년)<input name="years" type="number" min="0" step="0.5" placeholder="예: 3" /></label>
-          <label>지역<input name="region" placeholder="예: 서울" /></label>
-          <label>분야<input name="sector" placeholder="예: 바이오·헬스" /></label>
-          <label class="wide">키워드<input name="keywords" placeholder="예: 신약, 의료기기, 글로벌, R&D" />
-            <span class="meta">AI가 이 키워드를 참고해 공고 적합도를 판단합니다. 구체적이고 명확하게 적을수록 정확도가 높아집니다.</span>
+          <label><span data-i18n="companyNameLabel">회사명</span><input name="name" data-i18n-placeholder="companyNamePlaceholder" placeholder="예: ABC Bio" /></label>
+          <label><span data-i18n="companyYearsLabel">업력(년)</span><input name="years" type="number" min="0" step="0.5" data-i18n-placeholder="companyYearsPlaceholder" placeholder="예: 3" /></label>
+          <label><span data-i18n="companyRegionLabel">지역</span><input name="region" data-i18n-placeholder="companyRegionPlaceholder" placeholder="예: 서울" /></label>
+          <label><span data-i18n="companySectorLabel">분야</span><input name="sector" data-i18n-placeholder="companySectorPlaceholder" placeholder="예: 바이오·헬스" /></label>
+          <label class="wide"><span data-i18n="companyKeywordsLabel">키워드</span><input name="keywords" data-i18n-placeholder="companyKeywordsPlaceholder" placeholder="예: 신약, 의료기기, 글로벌, R&D" />
+            <span class="meta" data-i18n="companyKeywordsHint">AI가 이 키워드를 참고해 공고 적합도를 판단합니다. 구체적이고 명확하게 적을수록 정확도가 높아집니다.</span>
           </label>
-          <label class="checkbox wide"><input type="checkbox" name="keyword_mode_and" /> 키워드 모두 일치해야 적합 — 기본은 하나 이상 일치 시 적합</label>
-          <label class="checkbox"><input type="checkbox" name="venture" /> 벤처기업 인증 보유</label>
-          <label class="checkbox"><input type="checkbox" name="rnd_center" /> 기업부설연구소 보유</label>
+          <label class="checkbox wide"><input type="checkbox" name="keyword_mode_and" /> <span data-i18n="companyKeywordModeAnd">키워드 모두 일치해야 적합 — 기본은 하나 이상 일치 시 적합</span></label>
+          <label class="checkbox"><input type="checkbox" name="venture" /> <span data-i18n="companyVenture">벤처기업 인증 보유</span></label>
+          <label class="checkbox"><input type="checkbox" name="rnd_center" /> <span data-i18n="companyRndCenter">기업부설연구소 보유</span></label>
           <div class="wide form-actions">
-            <button class="primary" type="submit">저장</button>
-            <button class="button" type="button" id="btnDeleteCompany">회사 정보 삭제</button>
+            <button class="primary" type="submit" data-i18n="btnSave">저장</button>
+            <button class="button" type="button" id="btnDeleteCompany" data-i18n="btnDeleteCompany">회사 정보 삭제</button>
           </div>
         </form>
         <div class="panel">
-          <h2>회사 문서</h2>
-          <p>회사소개서·인증서·실적자료 등을 올리면 AI 맞춤 분석이 이 내용까지 참고해서 판단합니다 (PDF, DOCX, TXT, MD · 파일당 8MB · 최대 10개).</p>
+          <h2 data-i18n="companyDocsTitle">회사 문서</h2>
+          <p data-i18n="companyDocsDesc">회사소개서·인증서·실적자료 등을 올리면 AI 맞춤 분석이 이 내용까지 참고해서 판단합니다 (PDF, DOCX, TXT, MD · 파일당 8MB · 최대 10개).</p>
           <form id="companyDocsForm" class="form-grid">
-            <label class="wide">파일 선택<input type="file" name="files" id="companyDocsInput" accept=".pdf,.docx,.txt,.md" multiple /></label>
-            <div class="wide form-actions"><button class="primary" type="submit">업로드</button></div>
+            <label class="wide"><span data-i18n="fileSelectLabel">파일 선택</span><input type="file" name="files" id="companyDocsInput" accept=".pdf,.docx,.txt,.md" multiple /></label>
+            <div class="wide form-actions"><button class="primary" type="submit" data-i18n="btnUpload">업로드</button></div>
           </form>
           <div id="companyDocsList" class="doc-list"></div>
         </div>
         <div class="panel">
-          <h2>AI 맞춤 분석 모델</h2>
-          <p>AI 맞춤 분석에 사용할 모델과 API 키를 설정합니다. 키는 암호화되어 저장되고 화면에는 다시 표시되지 않습니다.</p>
+          <h2 data-i18n="llmModelTitle">AI 맞춤 분석 모델</h2>
+          <p data-i18n="llmModelDesc">AI 맞춤 분석에 사용할 모델과 API 키를 설정합니다. 키는 암호화되어 저장되고 화면에는 다시 표시되지 않습니다.</p>
           <form id="llmPreferenceForm" class="form-grid">
-            <label class="wide">모델
+            <label class="wide"><span data-i18n="modelLabel">모델</span>
               <select name="model_id" id="llmModelSelect"></select>
             </label>
-            <label class="wide" id="llmKeyLabel">LLM API 키
+            <label class="wide" id="llmKeyLabel"><span data-i18n="llmKeyLabel">LLM API 키</span>
               <div class="input-eye-wrap">
-                <input type="password" name="key" id="llmKeyInput" placeholder="비워두면 변경 없음" />
+                <input type="password" name="key" id="llmKeyInput" data-i18n-placeholder="llmKeyPlaceholder" placeholder="비워두면 변경 없음" />
                 <button type="button" class="eye-toggle" data-eye-toggle="llmKeyInput" aria-label="API 키 표시/숨기기"></button>
               </div>
             </label>
             <div class="wide form-actions">
-              <button class="primary" type="submit">저장</button>
-              <button class="button" type="button" id="btnDeleteLlmKey">키 삭제</button>
+              <button class="primary" type="submit" data-i18n="btnSave">저장</button>
+              <button class="button" type="button" id="btnDeleteLlmKey" data-i18n="btnDeleteKey">키 삭제</button>
             </div>
           </form>
           <p class="meta" id="llmPreferenceStatus"></p>
         </div>
         <div class="panel">
-          <h2>기업마당 API 키</h2>
-          <p>기업마당(bizinfo) 공고는 본인의 기업마당 API 키를 등록해야 볼 수 있습니다. 키는 <a href="https://www.bizinfo.go.kr" target="_blank" rel="noopener">기업마당</a>에서 무료로 발급받을 수 있습니다.</p>
+          <h2 data-i18n="bizinfoKeyTitle">기업마당 API 키</h2>
+          <p><span data-i18n="bizinfoKeyDescPre">기업마당(bizinfo) 공고는 본인의 기업마당 API 키를 등록해야 볼 수 있습니다. 키는</span> <a href="https://www.bizinfo.go.kr" target="_blank" rel="noopener" data-i18n="bizinfoLinkText">기업마당</a><span data-i18n="bizinfoKeyDescPost">에서 무료로 발급받을 수 있습니다.</span></p>
           <form id="bizinfoKeyForm" class="form-grid">
-            <label class="wide">API 키
+            <label class="wide"><span data-i18n="apiKeyLabel">API 키</span>
               <div class="input-eye-wrap">
-                <input type="password" name="bizinfo_key" id="bizinfoKeyInput" placeholder="발급받은 기업마당 API 키 (비워두면 변경 없음)" />
+                <input type="password" name="bizinfo_key" id="bizinfoKeyInput" data-i18n-placeholder="bizinfoKeyPlaceholder" placeholder="발급받은 기업마당 API 키 (비워두면 변경 없음)" />
                 <button type="button" class="eye-toggle" data-eye-toggle="bizinfoKeyInput" aria-label="API 키 표시/숨기기"></button>
               </div>
             </label>
             <div class="wide form-actions">
-              <button class="primary" type="submit">저장</button>
-              <button class="button" type="button" id="btnDeleteBizinfoKey">키 삭제</button>
+              <button class="primary" type="submit" data-i18n="btnSave">저장</button>
+              <button class="button" type="button" id="btnDeleteBizinfoKey" data-i18n="btnDeleteKey">키 삭제</button>
             </div>
           </form>
           <p class="meta" id="bizinfoKeyStatus"></p>
         </div>
         <div class="panel">
-          <h2>AI 맞춤 분석</h2>
-          <p>회사 정보를 저장한 뒤, 현재 올라와 있는 공고 전체를 Claude API로 분석해서 공고별로 적합/확인/부적합을 판정합니다. 공고 건수에 따라 수 분 걸릴 수 있습니다.</p>
-          <button id="btnAiFit" class="primary" type="button" style="margin-top:12px">AI로 맞춤 공고 분석 실행</button>
+          <h2 data-i18n="aiFitSectionTitle">AI 맞춤 분석</h2>
+          <p data-i18n="aiFitSectionDesc">회사 정보를 저장한 뒤, 현재 올라와 있는 공고 전체를 Claude API로 분석해서 공고별로 적합/확인/부적합을 판정합니다. 공고 건수에 따라 수 분 걸릴 수 있습니다.</p>
+          <button id="btnAiFit" class="primary" type="button" style="margin-top:4px" data-i18n="btnRunAiFit">AI로 맞춤 공고 분석 실행</button>
         </div>
       </div>
     </section>
 
     <section id="view-admin" class="view">
-      <header class="topbar"><div><h1>관리자</h1><p>수집 상태와 API 오류를 확인합니다.</p></div></header>
+      <header class="topbar"><div><h1 data-i18n="adminTitle">관리자</h1><p data-i18n="adminSubtitle">수집 상태와 API 오류를 확인합니다.</p></div></header>
       <div class="panel">
-        <h2>소스 상태</h2>
+        <h2 data-i18n="sourceStatusTitle">소스 상태</h2>
         <div id="sourcesTable"></div>
       </div>
       <div class="panel hidden" id="adminSchedulerPanel">
-        <h2>자동 수집 일정 (관리자)</h2>
-        <p>서버가 계속 실행 중인 동안, 지정한 시간/주기에 맞춰 자동으로 공고를 수집합니다.</p>
+        <h2 data-i18n="schedulerTitle">자동 수집 일정 (관리자)</h2>
+        <p data-i18n="schedulerDesc">서버가 계속 실행 중인 동안, 지정한 시간/주기에 맞춰 자동으로 공고를 수집합니다.</p>
         <p class="meta" id="schedulerStatus"></p>
         <form id="schedulerForm" class="form-grid">
-          <label class="checkbox wide"><input type="checkbox" name="enabled" id="schedulerEnabled" /> 자동 수집 사용</label>
+          <label class="checkbox wide"><input type="checkbox" name="enabled" id="schedulerEnabled" /> <span data-i18n="schedulerEnabledLabel">자동 수집 사용</span></label>
           <div class="wide scheduler-mode-row">
-            <label><input type="radio" name="mode" value="daily" checked /> 매일 지정 시간에</label>
-            <label><input type="radio" name="mode" value="interval" /> 일정 시간마다</label>
+            <label><input type="radio" name="mode" value="daily" checked /> <span data-i18n="schedulerModeDaily">매일 지정 시간에</span></label>
+            <label><input type="radio" name="mode" value="interval" /> <span data-i18n="schedulerModeInterval">일정 시간마다</span></label>
           </div>
           <div class="wide" id="schedulerDailyFields">
-            <label>시간<input type="time" name="time" id="schedulerTime" value="03:00" /></label>
+            <label><span data-i18n="timeLabel">시간</span><input type="time" name="time" id="schedulerTime" value="03:00" /></label>
             <div class="scheduler-days">
-              <label><input type="checkbox" name="days" value="mon" checked /> 월</label>
-              <label><input type="checkbox" name="days" value="tue" checked /> 화</label>
-              <label><input type="checkbox" name="days" value="wed" checked /> 수</label>
-              <label><input type="checkbox" name="days" value="thu" checked /> 목</label>
-              <label><input type="checkbox" name="days" value="fri" checked /> 금</label>
-              <label><input type="checkbox" name="days" value="sat" checked /> 토</label>
-              <label><input type="checkbox" name="days" value="sun" checked /> 일</label>
+              <label><input type="checkbox" name="days" value="mon" checked /> <span data-i18n="dayMon">월</span></label>
+              <label><input type="checkbox" name="days" value="tue" checked /> <span data-i18n="dayTue">화</span></label>
+              <label><input type="checkbox" name="days" value="wed" checked /> <span data-i18n="dayWed">수</span></label>
+              <label><input type="checkbox" name="days" value="thu" checked /> <span data-i18n="dayThu">목</span></label>
+              <label><input type="checkbox" name="days" value="fri" checked /> <span data-i18n="dayFri">금</span></label>
+              <label><input type="checkbox" name="days" value="sat" checked /> <span data-i18n="daySat">토</span></label>
+              <label><input type="checkbox" name="days" value="sun" checked /> <span data-i18n="daySun">일</span></label>
             </div>
           </div>
           <div class="wide hidden" id="schedulerIntervalFields">
-            <label>주기(시간)<input type="number" name="interval_hours" id="schedulerIntervalHours" min="1" max="168" value="6" /></label>
+            <label><span data-i18n="intervalHoursLabel">주기(시간)</span><input type="number" name="interval_hours" id="schedulerIntervalHours" min="1" max="168" value="6" /></label>
           </div>
           <div class="wide form-actions">
-            <button class="primary" type="submit">저장</button>
+            <button class="primary" type="submit" data-i18n="btnSave">저장</button>
           </div>
         </form>
       </div>
       <div class="panel hidden" id="adminSourcesPanel">
-        <h2>소스 관리 (관리자)</h2>
-        <p>이름과 공고 목록 페이지 URL만 넣으면 별도 코드 작성 없이 AI가 자동으로 수집 방법을 찾아냅니다. 미리보기를 확인하고 확정해야 실제 수집에 반영됩니다. 기존 소스는 아래 목록에서 URL을 바로 재정의할 수 있고, 커스텀 소스는 이름/URL 수정과 활성화·삭제까지 가능합니다.</p>
+        <h2 data-i18n="adminSourcesTitle">소스 관리 (관리자)</h2>
+        <p data-i18n="adminSourcesDesc">이름과 공고 목록 페이지 URL만 넣으면 별도 코드 작성 없이 AI가 자동으로 수집 방법을 찾아냅니다. 미리보기를 확인하고 확정해야 실제 수집에 반영됩니다. 기존 소스는 아래 목록에서 URL을 바로 재정의할 수 있고, 커스텀 소스는 이름/URL 수정과 활성화·삭제까지 가능합니다.</p>
         <div id="customSourceEditBanner" class="hidden meta"></div>
         <div class="custom-source-add-row">
-          <input type="text" id="customSourceName" placeholder="사이트 이름" />
-          <input type="text" id="customSourceUrl" placeholder="공고 목록 페이지 URL (https://...)" />
-          <button type="button" id="btnDiscoverCustomSource" class="button">저장</button>
+          <input type="text" id="customSourceName" data-i18n-placeholder="siteNamePlaceholder" placeholder="사이트 이름" />
+          <input type="text" id="customSourceUrl" data-i18n-placeholder="siteUrlPlaceholder" placeholder="공고 목록 페이지 URL (https://...)" />
+          <button type="button" id="btnDiscoverCustomSource" class="button" data-i18n="btnSave">저장</button>
         </div>
         <div id="customSourcePreview" class="hidden"></div>
-        <h3 style="margin-top:24px">전체 소스 목록</h3>
+        <h3 style="margin-top:24px" data-i18n="allSourcesListTitle">전체 소스 목록</h3>
         <div id="allSourcesTable"></div>
       </div>
     </section>
   </main>
 
+  <script src="/static/i18n.js"></script>
   <script src="/static/app.js"></script>
 </body>
 </html>

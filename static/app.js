@@ -13,6 +13,7 @@ function toast(msg, type=''){
   const el = document.createElement('div');
   el.className = `toast${type ? ' '+type : ''}`;
   el.innerHTML = `<span class="toast-msg">${esc(msg)}</span><button type="button" class="toast-close" aria-label="닫기">✕</button>`;
+  // (aria-label는 스크린리더용이라 시각적 검증 범위 밖 — 번역 대상에서 제외)
   const remove = () => {
     el.classList.add('leaving');
     setTimeout(()=>el.remove(), 180);
@@ -30,7 +31,7 @@ let currentUserState = null;
 
 function api(path, opts={}){
   return fetch(path, {headers:{'Content-Type':'application/json'}, credentials:'same-origin', ...opts}).then(async r=>{
-    const data = await r.json().catch(()=>({ok:false,error:'JSON 응답 아님'}));
+    const data = await r.json().catch(()=>({ok:false,error:t('jsonParseError')}));
     if(!r.ok || data.ok === false) throw new Error(data.error || `HTTP ${r.status}`);
     return data;
   });
@@ -39,20 +40,18 @@ function api(path, opts={}){
 function canonicalSource(id){
   return ({biohub_direct:'biohub', khidi_direct:'khidi'}[id] || id || 'unknown');
 }
+const SOURCE_NAME_KEYS = {
+  bizinfo:'srcBizinfo', kstartup:'srcKstartup', biohub:'srcBiohub', khidi:'srcKhidi',
+  kddf:'srcKddf', nrf:'srcNrf', g2b:'srcG2b', sample:'srcSample',
+};
 function sourceName(id){
   const cid = canonicalSource(id);
-  const fallback = {
-    bizinfo:'기업마당',
-    kstartup:'K-스타트업',
-    biohub:'서울바이오허브',
-    khidi:'보건산업진흥원/KHIDI',
-    kddf:'국가신약개발사업단',
-    nrf:'한국연구재단',
-    g2b:'나라장터',
-    sample:'샘플'
-  };
+  // 8개 고정 기관은 서버가 뭐라고 이름을 내려주든(한국어 고정값) 항상 번역해서
+  // 보여준다 — 서버 값이 항상 존재해서 예전 fallback 방식으로는 절대 안 쓰였다.
+  // 관리자가 URL로 직접 등록한 커스텀 소스는 이 표에 없으므로 그대로 서버 이름을 쓴다.
+  if(SOURCE_NAME_KEYS[cid]) return t(SOURCE_NAME_KEYS[cid]);
   const s = sources.find(x=>canonicalSource(x.id)===cid);
-  return s?.name || fallback[cid] || cid;
+  return s?.name || cid;
 }
 function statusClass(st){
   if(st==='접수중' || st==='상시') return 'open';
@@ -68,14 +67,14 @@ function ddayText(a){
   return `D-${a.dday}`;
 }
 function eligText(e){
-  if(!e) return '제한 없음/확인 필요';
+  if(!e) return t('eligNoLimit');
   const p=[];
-  if(e.minYears != null && e.maxYears != null) p.push(`업력 ${e.minYears}~${e.maxYears}년`);
-  else if(e.maxYears != null) p.push(`업력 ${e.maxYears}년 이내`);
-  else if(e.minYears != null) p.push(`업력 ${e.minYears}년 이상`);
-  if(e.regions?.length) p.push(`지역 ${e.regions.join('·')}`);
+  if(e.minYears != null && e.maxYears != null) p.push(t('eligYearsRange', {min:e.minYears, max:e.maxYears}));
+  else if(e.maxYears != null) p.push(t('eligYearsMax', {max:e.maxYears}));
+  else if(e.minYears != null) p.push(t('eligYearsMin', {min:e.minYears}));
+  if(e.regions?.length) p.push(t('eligRegion', {regions:e.regions.join('·')}));
   if(e.sectors?.length) p.push(e.sectors.join('·'));
-  return p.join(' / ') || '제한 없음/확인 필요';
+  return p.join(' / ') || t('eligNoLimit');
 }
 function noticeSources(a){
   const list = (a.sources && a.sources.length) ? a.sources : [{id:a.src, url:a.url}];
@@ -91,7 +90,7 @@ function noticeSources(a){
 }
 function aiFitBadge(a){
   if(!a.ai_fit) return '';
-  const label = {fit:'적합', unfit:'부적합', unsure:'확인'}[a.ai_fit] || '확인';
+  const label = {fit:t('aiFitFit'), unfit:t('aiFitUnfit'), unsure:t('aiFitUnsure')}[a.ai_fit] || t('aiFitUnsure');
   const cls = {fit:'open', unfit:'closed', unsure:''}[a.ai_fit] || '';
   const hasReason = !!a.ai_reason;
   const trig = hasReason ? ' ai-trigger' : '';
@@ -103,7 +102,7 @@ function aiFitBadge(a){
 function aiReasonRow(a){
   if(!a.ai_fit || !a.ai_reason) return '';
   return `<div class="ai-reason ${a.ai_fit}" data-ai-reason="${esc(a.id)}">
-    <span class="ai-reason-tag">AI 판정 근거</span>
+    <span class="ai-reason-tag">${esc(t('aiReasonTag'))}</span>
     <span class="ai-reason-text">${esc(a.ai_reason)}</span>
   </div>`;
 }
@@ -116,22 +115,22 @@ function noticeHTML(a){
     <div class="src-group">${srcBadges}</div>
     <div>
       <h3>${esc(a.title)}</h3>
-      <div class="meta">${esc(a.org)} · ${esc(a.category)} · ${a.dates_unknown ? '날짜 미상' : `${a.start ? esc(a.start) + ' ' : ''}~ ${a.end ? esc(a.end) : (a.status === '상시' ? '상시' : '-')}`}</div>
+      <div class="meta">${esc(a.org)} · ${esc(a.category)} · ${a.dates_unknown ? esc(t('statusUnknownDate')) : `${a.start ? esc(a.start) + ' ' : ''}~ ${a.end ? esc(a.end) : (a.status === '상시' ? esc(t('statusRolling')) : '-')}`}</div>
       <div class="badges">
-        <span class="badge ${statusClass(a.status)}">${esc(a.status)}${a.status_inferred ? '?' : ''}</span>
-        ${ddayText(a) !== a.status ? `<span class="badge ${a.dday != null && a.dday <= 7 && a.dday >= 0 ? 'urgent' : ''}">${esc(ddayText(a))}</span>` : ''}
+        <span class="badge ${statusClass(a.status)}">${esc(tStatus(a.status))}${a.status_inferred ? '?' : ''}</span>
+        ${ddayText(a) !== a.status ? `<span class="badge ${a.dday != null && a.dday <= 7 && a.dday >= 0 ? 'urgent' : ''}">${esc(tStatus(ddayText(a)))}</span>` : ''}
         ${aiFitBadge(a)}
       </div>
       ${aiReasonRow(a)}
     </div>
     <div class="right">
       <button class="star ${a.favorite?'on':''}" data-star="${esc(a.id)}">${a.favorite?'★':'☆'}</button>
-      <button class="detail-toggle" data-detail-toggle="${esc(a.id)}" aria-expanded="false">상세 <span class="detail-caret">▾</span></button>
+      <button class="detail-toggle" data-detail-toggle="${esc(a.id)}" aria-expanded="false">${esc(t('detailToggle'))} <span class="detail-caret">▾</span></button>
     </div>
     <div class="detail">
-      <div class="meta"><b>지원규모</b> ${esc(a.budget || '공고 참조')}</div>
-      <div class="meta"><b>신청자격</b> ${esc(eligText(a.elig))}</div>
-      <div class="meta"><b>원문</b> ${srcLinks}</div>
+      <div class="meta"><b>${esc(t('budgetLabel'))}</b> ${esc(a.budget || t('budgetDefault'))}</div>
+      <div class="meta"><b>${esc(t('eligLabel'))}</b> ${esc(eligText(a.elig))}</div>
+      <div class="meta"><b>${esc(t('sourceLinkLabel'))}</b> ${srcLinks}</div>
     </div>
   </article>`;
 }
@@ -155,11 +154,11 @@ function filtered(list){
 
 function renderList(){
   const list = filtered(notices);
-  $('#noticeList').innerHTML = list.length ? list.map(noticeHTML).join('') : `<div class="empty">조건에 맞는 공고가 없습니다.</div>`;
+  $('#noticeList').innerHTML = list.length ? list.map(noticeHTML).join('') : `<div class="empty">${esc(t('emptyNoticesFiltered'))}</div>`;
   bindNoticeEvents($('#noticeList'));
 
   const favs = notices.filter(x=>x.favorite);
-  const favEmptyMsg = currentUserState ? '관심 공고가 없습니다.' : '로그인하면 관심 공고를 저장할 수 있습니다.';
+  const favEmptyMsg = currentUserState ? t('emptyFavLoggedIn') : t('emptyFavLoggedOut');
   $('#favList').innerHTML = favs.length ? favs.map(noticeHTML).join('') : `<div class="empty">${esc(favEmptyMsg)}</div>`;
   bindNoticeEvents($('#favList'));
 
@@ -181,9 +180,9 @@ function renderAiFitMini(){
   const counts = {fit:0, unfit:0, unsure:0};
   judged.forEach(x=>{ counts[x.ai_fit] = (counts[x.ai_fit]||0) + 1; });
   const rows = [
-    ['적합', counts.fit, 'state-ok'],
-    ['확인', counts.unsure, 'state-wait'],
-    ['부적합', counts.unfit, 'state-bad'],
+    [t('aiFitFit'), counts.fit, 'state-ok'],
+    [t('aiFitUnsure'), counts.unsure, 'state-wait'],
+    [t('aiFitUnfit'), counts.unfit, 'state-bad'],
   ];
   el.innerHTML = rows.map(([label, n, cls])=>`<div class="source-mini"><span>${label}</span><span class="${cls}">${n}</span></div>`).join('');
 }
@@ -223,7 +222,10 @@ function renderCalendar(){
   if(!calViewDate) calViewDate = {y: today.getFullYear(), m: today.getMonth()+1};
   const {y, m} = calViewDate;
   const monthLabel = $('#calMonthLabel');
-  if(monthLabel) monthLabel.textContent = `${y}년 ${m}월`;
+  if(monthLabel){
+    const MONTH_NAMES_EN = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+    monthLabel.textContent = currentLang === 'en' ? `${MONTH_NAMES_EN[m-1]} ${y}` : `${y}년 ${m}월`;
+  }
 
   const groups = {};
   notices.filter(a=>a.end).forEach(a=>{
@@ -243,13 +245,14 @@ function renderCalendar(){
     const dayNotices = groups[dateStr] || [];
     cells.push(`<div class="cal-cell ${dateStr===todayStr?'today':''} ${dayNotices.length?'has-notice':''} ${dateStr===calSelectedDate?'selected':''}" data-date="${dateStr}">
       <div class="cal-daynum">${d}</div>
-      ${dayNotices.length ? `<div class="cal-count">${dayNotices.length}건</div>` : ''}
+      ${dayNotices.length ? `<div class="cal-count">${esc(countText(dayNotices.length))}</div>` : ''}
     </div>`);
   }
   const grid = $('#calendarGrid');
   if(grid){
+    const WEEKDAYS = currentLang === 'en' ? ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'] : ['일','월','화','수','목','금','토'];
     grid.innerHTML = `
-      <div class="cal-weekdays">${['일','월','화','수','목','금','토'].map(w=>`<div>${w}</div>`).join('')}</div>
+      <div class="cal-weekdays">${WEEKDAYS.map(w=>`<div>${w}</div>`).join('')}</div>
       <div class="cal-cells">${cells.join('')}</div>
     `;
     grid.querySelectorAll('.cal-cell.has-notice').forEach(cell=>{
@@ -267,8 +270,8 @@ function renderCalendar(){
   $('#calendarList').innerHTML = days.length ? days.map(d=>{
     const entries = groups[d];
     const rep = entries[0];
-    return `<div class="day" data-date="${esc(d)}"><h3>${esc(d)} <span class="badge ${statusClass(rep.status)}">${esc(ddayText(rep))}</span></h3>${entries.map(a=>`<div class="day-entry"><a href="${esc(a.url)}" target="_blank">${esc(a.title)}</a></div>`).join('')}</div>`;
-  }).join('') : `<div class="empty">이번 달 마감인 공고가 없습니다.</div>`;
+    return `<div class="day" data-date="${esc(d)}"><h3>${esc(d)} <span class="badge ${statusClass(rep.status)}">${esc(tStatus(ddayText(rep)))}</span></h3>${entries.map(a=>`<div class="day-entry"><a href="${esc(a.url)}" target="_blank">${esc(a.title)}</a></div>`).join('')}</div>`;
+  }).join('') : `<div class="empty">${esc(t('emptyCalendarMonth'))}</div>`;
 }
 
 function cleanSourceRows(rawSources){
@@ -315,14 +318,14 @@ function cleanSourceRows(rawSources){
 
 function renderSources(){
   const displaySources = cleanSourceRows(sources);
-  const mini = displaySources.map(s=>`<div class="source-mini"><span>${esc(s.name || s.id)}</span><span class="state-ok">정상 ${Number(s.count)||0}</span></div>`).join('');
-  $('#sourceMini').innerHTML = mini || '<div class="source-mini">아직 수집 전</div>';
+  const mini = displaySources.map(s=>`<div class="source-mini"><span>${esc(s.name || s.id)}</span><span class="state-ok">${esc(t('statusNormal'))} ${Number(s.count)||0}</span></div>`).join('');
+  $('#sourceMini').innerHTML = mini || `<div class="source-mini">${esc(t('emptyBeforeCollect'))}</div>`;
   const adminRows = rawSources.length ? rawSources : displaySources;
-  $('#sourcesTable').innerHTML = `<table class="table"><thead><tr><th>ID</th><th>소스</th><th>방식</th><th>상태</th><th>건수</th><th>오류</th></tr></thead><tbody>${adminRows.map(s=>`<tr><td>${esc(s.id)}</td><td>${esc(s.name||s.id)}</td><td>${esc(s.method||'')}</td><td>${esc(s.state||'미확인')}${s.anomaly?`<span class="badge-warn" title="${esc(s.anomaly_note||'')}">⚠ 이상감지</span>`:''}</td><td>${esc(Number(s.count)||0)}</td><td>${esc(s.error||s.anomaly_note||'')}</td></tr>`).join('')}</tbody></table>`;
+  $('#sourcesTable').innerHTML = `<table class="table"><thead><tr><th>${esc(t('colId'))}</th><th>${esc(t('colSource'))}</th><th>${esc(t('colMethod'))}</th><th>${esc(t('colState'))}</th><th>${esc(t('colCount'))}</th><th>${esc(t('colError'))}</th></tr></thead><tbody>${adminRows.map(s=>`<tr><td>${esc(s.id)}</td><td>${esc(SOURCE_NAME_KEYS[canonicalSource(s.id)] ? t(SOURCE_NAME_KEYS[canonicalSource(s.id)]) : (s.name||s.id))}</td><td>${esc(tStatus(s.method||''))}</td><td>${esc(tStatus(s.state||'미확인'))}${s.anomaly?`<span class="badge-warn" title="${esc(s.anomaly_note||'')}">${esc(t('anomalyBadgeText'))}</span>`:''}</td><td>${esc(Number(s.count)||0)}</td><td>${esc(s.error||s.anomaly_note||'')}</td></tr>`).join('')}</tbody></table>`;
   const sel = $('#sourceFilter');
   const cur = canonicalSource(sel.value);
   const ids = [...new Set(notices.flatMap(a=>noticeSources(a).map(s=>s.id)))];
-  sel.innerHTML = `<option value="">전체 소스</option>` + ids.map(id=>`<option value="${esc(id)}">${esc(sourceName(id))}</option>`).join('');
+  sel.innerHTML = `<option value="">${esc(t('optAllSources'))}</option>` + ids.map(id=>`<option value="${esc(id)}">${esc(sourceName(id))}</option>`).join('');
   sel.value = ids.includes(cur) ? cur : '';
 }
 
@@ -404,9 +407,9 @@ async function loadSchedulerConfig(){
     updateSchedulerModeFields();
     if(statusEl){
       const parts = [];
-      parts.push(cfg.enabled ? '사용 중' : '사용 안 함');
-      if(res.last_run) parts.push(`마지막 자동 수집: ${esc(res.last_run)}`);
-      if(res.next_run_estimate) parts.push(`다음 예정: ${esc(res.next_run_estimate)}`);
+      parts.push(cfg.enabled ? t('schedulerInUse') : t('schedulerNotInUse'));
+      if(res.last_run) parts.push(t('schedulerLastRun', {v:res.last_run}));
+      if(res.next_run_estimate) parts.push(t('schedulerNextRun', {v:res.next_run_estimate}));
       statusEl.textContent = parts.join(' · ');
     }
   }catch(err){ if(statusEl) statusEl.textContent = err.message; }
@@ -429,7 +432,7 @@ $('#schedulerForm')?.addEventListener('submit', async (e)=>{
   };
   try{
     await api('/api/admin/scheduler-config', {method:'POST', body:JSON.stringify(body)});
-    toast('자동 수집 일정 저장 완료', 'success');
+    toast(t('toastSchedulerSaved'), 'success');
     loadSchedulerConfig();
   }catch(err){ toast(err.message, 'error'); }
 });
@@ -455,33 +458,40 @@ async function loadAllSources(){
       api('/api/admin/source-overrides'),
       api('/api/admin/custom-sources'),
     ]);
-    const hardcoded = (overridesRes.items || []).map(s => `
+    const hardcoded = (overridesRes.items || []).map(s => {
+      // 관리자가 이름을 직접 바꾼 게 아니면(기본값 그대로면) 고정된 기관명이므로
+      // 화면 언어에 맞게 번역해서 보여준다 — 직접 바꾼 이름은 그대로 존중한다.
+      const displayName = (!s.name || s.name === s.default_name) && SOURCE_NAME_KEYS[canonicalSource(s.source_id)]
+        ? t(SOURCE_NAME_KEYS[canonicalSource(s.source_id)])
+        : s.name;
+      return `
       <div class="custom-source-row" data-source="${esc(s.source_id)}" data-kind="override">
         <div class="custom-source-info">
-          <div><strong>${esc(s.name)}</strong> <span class="badge-warn" style="background:rgba(0,0,0,.06);color:var(--muted)">기존 소스</span>${s.enabled ? '' : '<span class="badge-warn">비활성</span>'}</div>
-          <div class="custom-source-url">${esc(s.override_url || s.default_url || '(없음)')}${s.override_url ? ' <span class="meta">(기본값 재정의됨)</span>' : ''}</div>
+          <div><strong>${esc(displayName)}</strong> <span class="badge-warn" style="background:rgba(0,0,0,.06);color:var(--muted)">${esc(t('badgeExistingSource'))}</span>${s.enabled ? '' : `<span class="badge-warn">${esc(t('disabledBadge'))}</span>`}</div>
+          <div class="custom-source-url">${esc(s.override_url || s.default_url || t('noneValue'))}${s.override_url ? ` <span class="meta">${esc(t('overrideNotice'))}</span>` : ''}</div>
         </div>
         <div class="custom-source-actions">
-          <button type="button" class="button override-source-edit">수정</button>
-          <button type="button" class="button override-source-toggle">${s.enabled ? '비활성화' : '활성화'}</button>
+          <button type="button" class="button override-source-edit">${esc(t('btnEdit'))}</button>
+          <button type="button" class="button override-source-toggle">${s.enabled ? esc(t('btnDisable')) : esc(t('btnEnable'))}</button>
         </div>
       </div>
-    `).join('');
+    `;
+    }).join('');
     const custom = (customRes.items || []).map(s => `
       <div class="custom-source-row" data-source="${esc(s.id)}" data-kind="custom">
         <div class="custom-source-info">
-          <div><strong>${esc(s.name)}</strong> ${s.enabled ? '' : '<span class="badge-warn">비활성</span>'}${s.anomaly ? `<span class="badge-warn" title="${esc(s.anomaly_note||'')}">⚠ 이상감지</span>` : ''}${s.uses_detail_fetch ? '<span class="badge-warn" title="목록 페이지만으로는 부족해서 항목마다 상세 페이지를 추가로 가져옵니다 — 수집이 더 오래 걸립니다">🔎 상세 페이지 조회</span>' : ''}</div>
+          <div><strong>${esc(s.name)}</strong> ${s.enabled ? '' : `<span class="badge-warn">${esc(t('disabledBadge'))}</span>`}${s.anomaly ? `<span class="badge-warn" title="${esc(s.anomaly_note||'')}">${esc(t('anomalyBadgeText'))}</span>` : ''}${s.uses_detail_fetch ? `<span class="badge-warn" title="${esc(t('detailFetchBadgeTitle'))}">${esc(t('detailFetchBadgeText'))}</span>` : ''}</div>
           <div class="custom-source-url">${esc(s.list_url)}</div>
-          <div class="meta">${esc(s.state || '미확인')} · ${esc(Number(s.count)||0)}건 ${s.last_collected_at ? '· ' + esc(s.last_collected_at) : ''}</div>
+          <div class="meta">${esc(tStatus(s.state || '미확인'))} · ${esc(countText(Number(s.count)||0))} ${s.last_collected_at ? '· ' + esc(s.last_collected_at) : ''}</div>
         </div>
         <div class="custom-source-actions">
-          <button type="button" class="button custom-source-edit">수정</button>
-          <button type="button" class="button custom-source-toggle">${s.enabled ? '비활성화' : '활성화'}</button>
-          <button type="button" class="button custom-source-remove">삭제</button>
+          <button type="button" class="button custom-source-edit">${esc(t('btnEdit'))}</button>
+          <button type="button" class="button custom-source-toggle">${s.enabled ? esc(t('btnDisable')) : esc(t('btnEnable'))}</button>
+          <button type="button" class="button custom-source-remove">${esc(t('btnDelete'))}</button>
         </div>
       </div>
     `).join('');
-    el.innerHTML = hardcoded + custom || '<p class="meta">소스가 없습니다.</p>';
+    el.innerHTML = hardcoded + custom || `<p class="meta">${esc(t('emptySources'))}</p>`;
 
     el.querySelectorAll('.override-source-edit').forEach(btn=>{
       btn.addEventListener('click', ()=>{
@@ -500,7 +510,7 @@ async function loadAllSources(){
         const enabling = !(item && item.enabled);
         try{
           await api('/api/admin/source-overrides/toggle', {method:'POST', body:JSON.stringify({source_id, enabled: enabling})});
-          toast(enabling ? '활성화 완료' : '비활성화 완료', 'success');
+          toast(enabling ? t('toastEnabled') : t('toastDisabled'), 'success');
           loadAllSources();
           await loadAll();
         }catch(err){ toast(err.message, 'error'); }
@@ -519,10 +529,13 @@ async function loadAllSources(){
       btn.addEventListener('click', async ()=>{
         const row = btn.closest('.custom-source-row');
         const source_id = row.dataset.source;
-        const enabling = btn.textContent === '활성화';
+        // 버튼 글자로 현재 상태를 판단하면 영어 화면에서는 "활성화"라는 글자가 아예
+        // 없어서 항상 false가 되는 버그가 생긴다 — 데이터에서 실제 enabled 값을 본다.
+        const item = (customRes.items || []).find(s => s.id === source_id);
+        const enabling = !(item && item.enabled);
         try{
           await api('/api/admin/custom-sources/toggle', {method:'POST', body:JSON.stringify({source_id, enabled: enabling})});
-          toast(enabling ? '활성화 완료' : '비활성화 완료', 'success');
+          toast(enabling ? t('toastEnabled') : t('toastDisabled'), 'success');
           loadAllSources();
         }catch(err){ toast(err.message, 'error'); }
       });
@@ -531,10 +544,10 @@ async function loadAllSources(){
       btn.addEventListener('click', async ()=>{
         const row = btn.closest('.custom-source-row');
         const source_id = row.dataset.source;
-        if(!confirm('정말 삭제하시겠습니까? 수집된 공고도 함께 삭제됩니다(즐겨찾기한 공고는 남습니다).')) return;
+        if(!confirm(t('confirmRemoveCustomSource'))) return;
         try{
           await api('/api/admin/custom-sources/remove', {method:'POST', body:JSON.stringify({source_id})});
-          toast('삭제 완료', 'success');
+          toast(t('toastDeleted'), 'success');
           if(editingCustomSource?.id === source_id) editingCustomSource = null;
           loadAllSources();
           await loadAll();
@@ -558,10 +571,8 @@ function startEditingSource({id, originalUrl, originalName, kind}){
   const banner = $('#customSourceEditBanner');
   if(banner){
     banner.classList.remove('hidden');
-    const hint = kind === 'override'
-      ? '이 소스는 아직 전용 수집기를 사용합니다 — 이름/URL을 바꾸고 저장하면 재발견 없이 바로 적용됩니다.'
-      : 'URL을 바꾸면 다시 미리보기를 거쳐야 합니다.';
-    banner.innerHTML = `"${esc(originalName)}" 수정 중 — ${hint} <a href="#" id="btnCancelEditCustomSource">취소</a>`;
+    const hint = kind === 'override' ? t('editHintOverride') : t('editHintCustom');
+    banner.innerHTML = `${esc(t('editingBanner', {name: originalName, hint}))} <a href="#" id="btnCancelEditCustomSource">${esc(t('cancelLink'))}</a>`;
     $('#btnCancelEditCustomSource')?.addEventListener('click', (e)=>{
       e.preventDefault();
       clearCustomSourceForm();
@@ -592,16 +603,16 @@ function renderCustomSourcePreview(){
   `).join('');
   el.className = 'custom-source-preview';
   el.innerHTML = `
-    <p><strong>${esc(p.name)}</strong> — 총 ${esc(p.item_count)}건 발견</p>
+    <p><strong>${esc(p.name)}</strong> ${esc(t('previewFoundCount', {n: p.item_count}))}</p>
     ${warningsHtml}
     <table>
-      <thead><tr><th>제목</th><th>기관</th><th>기간</th><th>URL</th></tr></thead>
+      <thead><tr><th>${esc(t('previewColTitle'))}</th><th>${esc(t('previewColOrg'))}</th><th>${esc(t('previewColPeriod'))}</th><th>${esc(t('previewColUrl'))}</th></tr></thead>
       <tbody>${rowsHtml}</tbody>
     </table>
-    <details><summary>레시피 원본 보기</summary><pre>${esc(JSON.stringify(p.recipe, null, 2))}</pre></details>
+    <details><summary>${esc(t('recipeDetailsSummary'))}</summary><pre>${esc(JSON.stringify(p.recipe, null, 2))}</pre></details>
     <div class="preview-actions">
-      <button type="button" class="primary" id="btnConfirmCustomSource">${p.editing ? '확정 (변경사항 반영)' : '확정 (수집에 반영)'}</button>
-      <button type="button" class="button" id="btnCancelCustomSource">취소</button>
+      <button type="button" class="primary" id="btnConfirmCustomSource">${p.editing ? esc(t('btnConfirmEdit')) : esc(t('btnConfirmNew'))}</button>
+      <button type="button" class="button" id="btnCancelCustomSource">${esc(t('btnCancel'))}</button>
     </div>
   `;
   $('#btnConfirmCustomSource')?.addEventListener('click', async ()=>{
@@ -609,7 +620,7 @@ function renderCustomSourcePreview(){
     btn.disabled = true;
     try{
       await api('/api/admin/custom-sources/confirm', {method:'POST', body:JSON.stringify(pendingCustomSource)});
-      toast(pendingCustomSource.editing ? '수정 완료' : '등록 완료 — 이후부터 자동으로 수집됩니다', 'success');
+      toast(pendingCustomSource.editing ? t('toastEditConfirmed') : t('toastRegistered'), 'success');
       pendingCustomSource = null;
       clearCustomSourceForm();
       renderCustomSourcePreview();
@@ -631,14 +642,14 @@ $('#btnDiscoverCustomSource')?.addEventListener('click', async ()=>{
   const urlEl = $('#customSourceUrl');
   const name = nameEl?.value.trim();
   const url = urlEl?.value.trim();
-  if(!name || !url){ toast('이름과 URL을 모두 입력해주세요.', 'error'); return; }
+  if(!name || !url){ toast(t('toastEnterNameUrl'), 'error'); return; }
 
   // 기존 하드코딩 소스(K-스타트업/NRF 등)는 아직 전용 수집기를 쓰므로 이름/URL 중
   // 뭘 바꿔도 재발견 없이 항상 바로 저장한다.
   if(editingCustomSource?.kind === 'override'){
     try{
       await api('/api/admin/source-overrides', {method:'POST', body:JSON.stringify({source_id: editingCustomSource.id, list_url: url, name})});
-      toast('수정 내용 저장 완료', 'success');
+      toast(t('toastEditSaved'), 'success');
       clearCustomSourceForm();
       loadAllSources();
       await loadAll();
@@ -651,7 +662,7 @@ $('#btnDiscoverCustomSource')?.addEventListener('click', async ()=>{
   if(editingCustomSource && url === editingCustomSource.originalUrl){
     try{
       await api('/api/admin/custom-sources/rename', {method:'POST', body:JSON.stringify({source_id: editingCustomSource.id, name})});
-      toast('이름 수정 완료', 'success');
+      toast(t('toastNameUpdated'), 'success');
       clearCustomSourceForm();
       loadAllSources();
       await loadAll();
@@ -662,27 +673,27 @@ $('#btnDiscoverCustomSource')?.addEventListener('click', async ()=>{
   const btn = $('#btnDiscoverCustomSource');
   btn.disabled = true;
   btn.dataset.originalText = btn.textContent;
-  btn.textContent = '분석 중... (최대 1~2분)';
+  btn.textContent = t('btnAnalyzingRecipe');
   try{
     const body = {name, url};
     if(editingCustomSource) body.existing_source_id = editingCustomSource.id;
     const res = await api('/api/admin/custom-sources/discover', {method:'POST', body:JSON.stringify(body)});
     pendingCustomSource = res;
     renderCustomSourcePreview();
-    toast('미리보기 준비 완료 — 확인 후 확정해주세요', 'success');
+    toast(t('toastPreviewReady'), 'success');
   }catch(err){
     toast(err.message, 'error');
   }finally{
     btn.disabled = false;
-    btn.textContent = btn.dataset.originalText || '저장';
+    btn.textContent = btn.dataset.originalText || t('btnSave');
   }
 });
 
 function updateApiKeyStatus(){
   const bizEl = $('#bizinfoKeyStatus');
-  if(bizEl) bizEl.textContent = currentUserState?.has_bizinfo_key ? '기업마당 API 키가 등록되어 있습니다.' : '등록된 기업마당 API 키가 없습니다 — 기업마당 공고가 목록에서 보이지 않습니다.';
+  if(bizEl) bizEl.textContent = currentUserState?.has_bizinfo_key ? t('bizinfoKeyRegistered') : t('bizinfoKeyNotRegistered');
   const el = $('#llmPreferenceStatus');
-  if(el) el.textContent = currentUserState?.has_llm_key ? 'API 키가 등록되어 있습니다.' : '등록된 API 키가 없습니다.';
+  if(el) el.textContent = currentUserState?.has_llm_key ? t('apiKeyRegistered') : t('apiKeyNotRegistered');
 }
 
 let llmModels = [];
@@ -712,18 +723,18 @@ async function recollect(){
   btns.forEach(b=>{
     b.disabled = true;
     b.dataset.originalText = b.textContent;
-    b.textContent = '업데이트 중...';
+    b.textContent = t('btnUpdating');
   });
   try{
     const res = await api('/api/recollect', {method:'POST', body:'{}'});
     await loadAll();
-    toast(`업데이트 완료: ${res.count}건`, 'success');
+    toast(t('toastUpdateDone', {n: res.count}), 'success');
   }catch(err){
-    toast(`업데이트 실패: ${err.message}`, 'error');
+    toast(t('toastUpdateFailed', {msg: err.message}), 'error');
   }finally{
     btns.forEach(b=>{
       b.disabled = false;
-      b.textContent = b.dataset.originalText || '업데이트';
+      b.textContent = b.dataset.originalText || t('btnUpdate');
     });
   }
 }
@@ -775,33 +786,33 @@ $('#companyForm')?.addEventListener('submit', async e=>{
   const res = await api('/api/company', {method:'POST', body:JSON.stringify(data)});
   company = res.company || {};
   renderList();
-  toast('회사 정보 저장 완료', 'success');
+  toast(t('toastCompanySaved'), 'success');
 });
 $('#btnDeleteCompany')?.addEventListener('click', async ()=>{
-  if(!confirm('저장된 회사 정보를 삭제할까요?')) return;
+  if(!confirm(t('confirmDeleteCompany'))) return;
   const res = await api('/api/company', {method:'POST', body:JSON.stringify({})});
   company = res.company || {};
   fillCompany();
   renderList();
-  toast('회사 정보 삭제 완료', 'success');
+  toast(t('toastCompanyDeleted'), 'success');
 });
 $('#btnAiFit')?.addEventListener('click', async ()=>{
   const btn = $('#btnAiFit');
   if(btn){
     btn.disabled = true;
     btn.dataset.originalText = btn.textContent;
-    btn.textContent = 'AI 분석 중...';
+    btn.textContent = t('btnAiAnalyzing');
   }
   try{
     const res = await api('/api/ai-fit', {method:'POST', body:'{}'});
     await loadAll();
-    toast(`AI 분석 완료: 총 ${res.count}건`, 'success');
+    toast(t('toastAiFitDone', {n: res.count}), 'success');
   }catch(err){
-    toast(`AI 분석 실패: ${err.message}`, 'error');
+    toast(t('toastAiFitFailed', {msg: err.message}), 'error');
   }finally{
     if(btn){
       btn.disabled = false;
-      btn.textContent = btn.dataset.originalText || 'AI로 맞춤 공고 분석 실행';
+      btn.textContent = btn.dataset.originalText || t('btnRunAiFit');
     }
   }
 });
@@ -822,19 +833,19 @@ $('#llmPreferenceForm')?.addEventListener('submit', async e=>{
     }
     form.elements.key.value = '';
     fillLlmPreference();
-    toast('AI 모델 설정 저장 완료', 'success');
+    toast(t('toastLlmSaved'), 'success');
   }catch(err){ toast(err.message, 'error'); }
 });
 $('#btnDeleteLlmKey')?.addEventListener('click', async ()=>{
   const modelId = $('#llmModelSelect')?.value;
   if(!modelId) return;
-  if(!confirm('등록된 API 키를 삭제할까요?')) return;
+  if(!confirm(t('confirmDeleteApiKey'))) return;
   try{
     const res = await api('/api/me/llm-key', {method:'POST', body:JSON.stringify({model_id: modelId, key: ''})});
     if(currentUserState) currentUserState.has_llm_key = res.has_llm_key;
     updateApiKeyStatus();
     $('#llmPreferenceForm')?.reset();
-    toast('API 키 삭제 완료', 'success');
+    toast(t('toastApiKeyDeleted'), 'success');
   }catch(err){ toast(err.message, 'error'); }
 });
 
@@ -842,25 +853,25 @@ $('#bizinfoKeyForm')?.addEventListener('submit', async e=>{
   e.preventDefault();
   const form = e.currentTarget;
   const data = Object.fromEntries(new FormData(form).entries());
-  if(!data.bizinfo_key){ toast('입력한 내용이 없어 변경하지 않았습니다'); return; }
+  if(!data.bizinfo_key){ toast(t('toastBizinfoNoChange')); return; }
   try{
     const res = await api('/api/me/bizinfo-key', {method:'POST', body:JSON.stringify({bizinfo_key: data.bizinfo_key})});
     if(currentUserState) currentUserState.has_bizinfo_key = res.has_bizinfo_key;
     updateApiKeyStatus();
     form.reset();
     await loadAll();
-    toast('기업마당 API 키 저장 완료', 'success');
+    toast(t('toastBizinfoSaved'), 'success');
   }catch(err){ toast(err.message, 'error'); }
 });
 $('#btnDeleteBizinfoKey')?.addEventListener('click', async ()=>{
-  if(!confirm('등록된 기업마당 API 키를 삭제할까요?')) return;
+  if(!confirm(t('confirmDeleteBizinfoKey'))) return;
   try{
     const res = await api('/api/me/bizinfo-key', {method:'POST', body:JSON.stringify({bizinfo_key: ''})});
     if(currentUserState) currentUserState.has_bizinfo_key = res.has_bizinfo_key;
     updateApiKeyStatus();
     $('#bizinfoKeyForm')?.reset();
     await loadAll();
-    toast('기업마당 API 키 삭제 완료', 'success');
+    toast(t('toastBizinfoDeleted'), 'success');
   }catch(err){ toast(err.message, 'error'); }
 });
 
@@ -875,11 +886,11 @@ async function loadCompanyDocs(){
       ? items.map(d => `
           <div class="doc-row" data-id="${esc(d.id)}">
             <span class="doc-name">${esc(d.filename)}</span>
-            <span class="doc-meta">${esc(d.char_count)}자</span>
-            <button type="button" class="button doc-delete">삭제</button>
+            <span class="doc-meta">${esc(t('docCharCount', {n: d.char_count}))}</span>
+            <button type="button" class="button doc-delete">${esc(t('btnDelete'))}</button>
           </div>
         `).join('')
-      : '<p class="meta">등록된 문서가 없습니다.</p>';
+      : `<p class="meta">${esc(t('emptyDocs'))}</p>`;
     el.querySelectorAll('.doc-delete').forEach(btn=>{
       btn.addEventListener('click', async ()=>{
         const doc_id = btn.closest('.doc-row').dataset.id;
@@ -896,7 +907,7 @@ $('#companyDocsForm')?.addEventListener('submit', async e=>{
   e.preventDefault();
   const form = e.currentTarget;
   const input = $('#companyDocsInput');
-  if(!input.files.length){ toast('업로드할 파일을 선택해주세요.', 'error'); return; }
+  if(!input.files.length){ toast(t('toastNoFileSelected'), 'error'); return; }
   const fd = new FormData();
   for(const f of input.files) fd.append('files', f);
   try{
@@ -904,7 +915,7 @@ $('#companyDocsForm')?.addEventListener('submit', async e=>{
     const data = await res.json();
     if(!res.ok || data.ok === false) throw new Error(data.error || `HTTP ${res.status}`);
     form.reset();
-    toast('문서 업로드 완료', 'success');
+    toast(t('toastDocUploaded'), 'success');
     loadCompanyDocs();
   }catch(err){ toast(err.message, 'error'); }
 });
@@ -913,10 +924,10 @@ let authMode = 'login';
 
 function openAuthModal(mode){
   authMode = mode;
-  $('#authModalTitle').textContent = mode === 'login' ? '로그인' : '회원가입';
-  $('#authSubmit').textContent = mode === 'login' ? '로그인' : '가입하기';
-  $('#authSwitchLabel').textContent = mode === 'login' ? '계정이 없으신가요?' : '이미 계정이 있으신가요?';
-  $('#authSwitchMode').textContent = mode === 'login' ? '가입하기' : '로그인';
+  $('#authModalTitle').textContent = mode === 'login' ? t('authTitleLogin') : t('authTitleSignup');
+  $('#authSubmit').textContent = mode === 'login' ? t('authSubmitLogin') : t('authSubmitSignup');
+  $('#authSwitchLabel').textContent = mode === 'login' ? t('authSwitchToSignup') : t('authSwitchToLogin');
+  $('#authSwitchMode').textContent = mode === 'login' ? t('authSwitchLinkSignup') : t('authSwitchLinkLogin');
   $('#authModal').classList.remove('hidden');
 }
 function closeAuthModal(){
@@ -967,6 +978,21 @@ $$('[data-eye-toggle]').forEach(btn=>{
   });
 });
 
+applyStaticTranslations();
+document.addEventListener('langchange', ()=>{
+  renderSources();
+  renderList();
+  fillLlmPreference();
+  if(currentUserState) loadCompanyDocs();
+  if(currentUserState?.is_admin){
+    loadAllSources();
+    loadSchedulerConfig();
+  }
+});
+$$('[data-lang-btn]').forEach(btn=>{
+  btn.addEventListener('click', ()=>setLang(btn.dataset.langBtn));
+});
+
 loadAll().catch(err=>{
-  document.body.innerHTML = `<main style="padding:30px"><h1>서버 연결 실패</h1><pre>${esc(err.stack || err.message)}</pre><p>PowerShell에서 <code>python server.py</code> 또는 <code>start-server-v3.ps1</code>로 실행했는지 확인하세요.</p></main>`;
+  document.body.innerHTML = `<main style="padding:30px"><h1>${esc(t('serverConnFailed'))}</h1><pre>${esc(err.stack || err.message)}</pre><p>${esc(t('serverConnFailedHint'))}</p></main>`;
 });
