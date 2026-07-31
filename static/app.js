@@ -290,13 +290,12 @@ function cleanSourceRows(rawSources){
     }
     const g = groups.get(id);
     g.name = sourceName(id);
-    g.method = g.method || s.method || '';
     if(s.last_collected_at && (!g.last_collected_at || s.last_collected_at > g.last_collected_at)) g.last_collected_at = s.last_collected_at;
     if(!g.error && s.error) g.error = s.error;
     if(['대기','비활성화','0건','미확인'].includes(g.state) && s.state) g.state = s.state;
   });
   Object.entries(noticeCounts).forEach(([id,count])=>{
-    if(!groups.has(id)) groups.set(id, {id, name:sourceName(id), method:'', state:'정상', count});
+    if(!groups.has(id)) groups.set(id, {id, name:sourceName(id), state:'정상', count});
     const g = groups.get(id);
     g.count = count;
     if(count > 0){
@@ -321,7 +320,7 @@ function renderSources(){
   const mini = displaySources.map(s=>`<div class="source-mini"><span>${esc(s.name || s.id)}</span><span class="state-ok">${esc(t('statusNormal'))} ${Number(s.count)||0}</span></div>`).join('');
   $('#sourceMini').innerHTML = mini || `<div class="source-mini">${esc(t('emptyBeforeCollect'))}</div>`;
   const adminRows = rawSources.length ? rawSources : displaySources;
-  $('#sourcesTable').innerHTML = `<table class="table"><thead><tr><th>${esc(t('colId'))}</th><th>${esc(t('colSource'))}</th><th>${esc(t('colMethod'))}</th><th>${esc(t('colState'))}</th><th>${esc(t('colCount'))}</th><th>${esc(t('colError'))}</th></tr></thead><tbody>${adminRows.map(s=>`<tr><td>${esc(s.id)}</td><td>${esc(SOURCE_NAME_KEYS[canonicalSource(s.id)] ? t(SOURCE_NAME_KEYS[canonicalSource(s.id)]) : (s.name||s.id))}</td><td>${esc(tStatus(s.method||''))}</td><td>${esc(tStatus(s.state||'미확인'))}${s.anomaly?`<span class="badge-warn" title="${esc(s.anomaly_note||'')}">${esc(t('anomalyBadgeText'))}</span>`:''}</td><td>${esc(Number(s.count)||0)}</td><td>${esc(s.error||s.anomaly_note||'')}</td></tr>`).join('')}</tbody></table>`;
+  $('#sourcesTable').innerHTML = `<table class="table"><thead><tr><th>${esc(t('colId'))}</th><th>${esc(t('colSource'))}</th><th>${esc(t('colState'))}</th><th>${esc(t('colCount'))}</th><th>${esc(t('colError'))}</th></tr></thead><tbody>${adminRows.map(s=>`<tr><td>${esc(s.id)}</td><td>${esc(SOURCE_NAME_KEYS[canonicalSource(s.id)] ? t(SOURCE_NAME_KEYS[canonicalSource(s.id)]) : (s.name||s.id))}</td><td>${esc(tStatus(s.state||'미확인'))}${s.anomaly?`<span class="badge-warn" title="${esc(s.anomaly_note||'')}">${esc(t('anomalyBadgeText'))}</span>`:''}</td><td>${esc(Number(s.count)||0)}</td><td>${esc(s.error||s.anomaly_note||'')}</td></tr>`).join('')}</tbody></table>`;
   const sel = $('#sourceFilter');
   const cur = canonicalSource(sel.value);
   const ids = [...new Set(notices.flatMap(a=>noticeSources(a).map(s=>s.id)))];

@@ -134,12 +134,6 @@ const TRANSLATIONS = {
     disabledBadge: '비활성',
     statusError: '오류',
     statusUnknown: '미확인',
-    methodRecipe: '레시피',
-    methodDedicatedParser: '전용 파서',
-    methodDedicatedParserApi: '전용 파서(API)',
-    methodViaBizinfo: '기업마당 경유',
-    methodViaIris: 'IRIS 경유',
-    methodBoard: '게시판',
     statusWaiting: '대기',
     statusZero: '0건',
     statusRecoveredViaRecipe: '레시피로 복구됨',
@@ -171,7 +165,7 @@ const TRANSLATIONS = {
     emptySources: '소스가 없습니다.',
     emptyDocs: '등록된 문서가 없습니다.',
 
-    colId: 'ID', colSource: '소스', colMethod: '방식', colState: '상태', colCount: '건수', colError: '오류',
+    colId: 'ID', colSource: '소스', colState: '상태', colCount: '건수', colError: '오류',
     previewColTitle: '제목', previewColOrg: '기관', previewColPeriod: '기간', previewColUrl: 'URL',
 
     btnEdit: '수정',
@@ -369,12 +363,6 @@ const TRANSLATIONS = {
     disabledBadge: 'Disabled',
     statusError: 'Error',
     statusUnknown: 'Unknown',
-    methodRecipe: 'Recipe',
-    methodDedicatedParser: 'Dedicated Parser',
-    methodDedicatedParserApi: 'Dedicated Parser (API)',
-    methodViaBizinfo: 'Via Bizinfo',
-    methodViaIris: 'Via IRIS',
-    methodBoard: 'Board',
     statusWaiting: 'Waiting',
     statusZero: '0 items',
     statusRecoveredViaRecipe: 'Recovered via Recipe',
@@ -406,7 +394,7 @@ const TRANSLATIONS = {
     emptySources: 'No sources.',
     emptyDocs: 'No documents uploaded.',
 
-    colId: 'ID', colSource: 'Source', colMethod: 'Method', colState: 'State', colCount: 'Count', colError: 'Error',
+    colId: 'ID', colSource: 'Source', colState: 'State', colCount: 'Count', colError: 'Error',
     previewColTitle: 'Title', previewColOrg: 'Org', previewColPeriod: 'Period', previewColUrl: 'URL',
 
     btnEdit: 'Edit',
@@ -483,9 +471,7 @@ const TRANSLATIONS = {
 const STATUS_LABELS = {
   '정상': 'statusNormal', '마감': 'statusClosed', '접수중': 'statusOpen', '상시': 'statusRolling',
   '날짜 미상': 'statusUnknownDate', '차단(robots)': 'statusBlockedRobots', '비활성화': 'statusDisabled',
-  '비활성': 'disabledBadge', '오류': 'statusError', '미확인': 'statusUnknown', '레시피': 'methodRecipe',
-  '전용 파서': 'methodDedicatedParser', '전용 파서(API)': 'methodDedicatedParserApi',
-  '기업마당 경유': 'methodViaBizinfo', 'IRIS 경유': 'methodViaIris', '게시판': 'methodBoard',
+  '비활성': 'disabledBadge', '오류': 'statusError', '미확인': 'statusUnknown',
   '대기': 'statusWaiting', '0건': 'statusZero', '레시피로 복구됨': 'statusRecoveredViaRecipe',
   '레시피 없음': 'statusNoRecipe', '기존 소스': 'badgeExistingSource', '확인': 'statusCheck',
 };
