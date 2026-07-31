@@ -1263,6 +1263,9 @@ def fetch_biohub_program_list(
 def collect_biohub_direct(bcfg: Dict[str, Any], common: Dict[str, Any]) -> List[Dict[str, Any]]:
     """서울바이오허브 전용 수집기.
 
+    더 이상 collect_all()이 평시 수집에 쓰지 않는다(_collect_via_stored_recipe()로
+    대체됨) — 만일을 위해 코드만 남겨뒀다.
+
     일반 게시판 크롤러와 달리 서울바이오허브는 상세 URL인
     supportManageView.do?gubun=..&seq=.. 페이지를 직접 파싱한다.
     1) 목록 페이지(supportManageListPage.do)를 POST로 조회해 실제 존재하는
@@ -1585,8 +1588,8 @@ def collect_all(write_db: bool = True) -> CollectRun:
             continue
         try:
             if sid == "biohub_direct":
-                items = collect_biohub_direct(board_cfg, common)[:cap]
-                run.record(sid, items, "정상", name=board_cfg.get("name") or "서울바이오허브(직접)", method="전용 파서")
+                items = _collect_via_stored_recipe(sid, common, cap)
+                run.record(sid, items, "정상", name=board_cfg.get("name") or "서울바이오허브(직접)", method="레시피")
             elif sid == "nrf":
                 items = _collect_via_stored_recipe(sid, common, cap)
                 run.record(sid, items, "정상", name=board_cfg.get("name") or "한국연구재단", method="레시피")
