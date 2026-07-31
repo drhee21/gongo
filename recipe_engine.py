@@ -337,9 +337,14 @@ def run_recipe(source_id: str, recipe: Dict[str, Any], common: Dict[str, Any]) -
             if not title:
                 continue
 
+            if fields.get("url"):
+                # 목록에서 뽑은 url이 상대경로일 수 있다(예: href="/board/view?id=1") —
+                # detail_field_map이 없어도(상세 페이지를 안 가져오는 레시피여도) 최종
+                # 저장되는 url은 항상 절대경로여야 링크가 실제로 동작한다.
+                fields["url"] = urljoin(fetch["url"], fields["url"])
+
             if detail_field_map and fields.get("url"):
-                detail_url = urljoin(fetch["url"], fields["url"])
-                fields["url"] = detail_url
+                detail_url = fields["url"]
                 if not detail_robots_checked:
                     detail_robots_checked = True
                     if common.get("respect_robots", True) and not collector.robots_allows(detail_url):
