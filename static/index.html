@@ -136,6 +136,15 @@
           </div>
         </form>
         <div class="panel">
+          <h2>회사 문서</h2>
+          <p>회사소개서·인증서·실적자료 등을 올리면 AI 맞춤 분석이 이 내용까지 참고해서 판단합니다 (PDF, DOCX, TXT, MD · 파일당 8MB · 최대 10개).</p>
+          <form id="companyDocsForm" class="form-grid">
+            <label class="wide">파일 선택<input type="file" name="files" id="companyDocsInput" accept=".pdf,.docx,.txt,.md" multiple /></label>
+            <div class="wide form-actions"><button class="primary" type="submit">업로드</button></div>
+          </form>
+          <div id="companyDocsList" class="doc-list"></div>
+        </div>
+        <div class="panel">
           <h2>AI 맞춤 분석 모델</h2>
           <p>AI 맞춤 분석에 사용할 모델과 API 키를 설정합니다. 키는 암호화되어 저장되고 화면에는 다시 표시되지 않습니다.</p>
           <form id="llmPreferenceForm" class="form-grid">
@@ -171,15 +180,6 @@
             </div>
           </form>
           <p class="meta" id="bizinfoKeyStatus"></p>
-        </div>
-        <div class="panel">
-          <h2>회사 문서</h2>
-          <p>회사소개서·인증서·실적자료 등을 올리면 AI 맞춤 분석이 이 내용까지 참고해서 판단합니다 (PDF, DOCX, TXT, MD · 파일당 8MB · 최대 10개).</p>
-          <form id="companyDocsForm" class="form-grid">
-            <label class="wide">파일 선택<input type="file" name="files" id="companyDocsInput" accept=".pdf,.docx,.txt,.md" multiple /></label>
-            <div class="wide form-actions"><button class="primary" type="submit">업로드</button></div>
-          </form>
-          <div id="companyDocsList" class="doc-list"></div>
         </div>
         <div class="panel">
           <h2>AI 맞춤 분석</h2>
