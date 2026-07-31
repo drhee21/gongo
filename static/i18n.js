@@ -126,6 +126,7 @@ const TRANSLATIONS = {
     statusNormal: '정상',
     statusClosed: '마감',
     statusOpen: '접수중',
+    statusUpcoming: '접수예정',
     statusRolling: '상시',
     statusUnknownDate: '날짜 미상',
     anomalyDetected: '이상감지',
@@ -355,6 +356,7 @@ const TRANSLATIONS = {
     statusNormal: 'Normal',
     statusClosed: 'Closed',
     statusOpen: 'Open',
+    statusUpcoming: 'Upcoming',
     statusRolling: 'Rolling',
     statusUnknownDate: 'Date Unknown',
     anomalyDetected: 'Anomaly',
@@ -469,7 +471,7 @@ const TRANSLATIONS = {
 // 비교 로직(statusClass, ddayText 등)은 이 표와 무관하게 원래 한국어 값을 그대로
 // 비교해야 한다 — 이 표는 오직 "화면에 뭐라고 그릴지"에만 쓴다.
 const STATUS_LABELS = {
-  '정상': 'statusNormal', '마감': 'statusClosed', '접수중': 'statusOpen', '상시': 'statusRolling',
+  '정상': 'statusNormal', '마감': 'statusClosed', '접수중': 'statusOpen', '접수예정': 'statusUpcoming', '상시': 'statusRolling',
   '날짜 미상': 'statusUnknownDate', '차단(robots)': 'statusBlockedRobots', '비활성화': 'statusDisabled',
   '비활성': 'disabledBadge', '오류': 'statusError', '미확인': 'statusUnknown',
   '대기': 'statusWaiting', '0건': 'statusZero', '레시피로 복구됨': 'statusRecoveredViaRecipe',
