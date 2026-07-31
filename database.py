@@ -200,6 +200,12 @@ def init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_notices_source ON notices(source);
             CREATE INDEX IF NOT EXISTS idx_notices_end ON notices(end_date);
             CREATE INDEX IF NOT EXISTS idx_notices_category ON notices(category);
+
+            CREATE TABLE IF NOT EXISTS app_settings (
+                key TEXT PRIMARY KEY,
+                value_json TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
             """
         )
         _ensure_column(con, "users", "bizinfo_api_key_enc", "TEXT")
@@ -725,6 +731,32 @@ def set_user_setting(user_id: str, key: str, value: Any) -> None:
             ON CONFLICT(user_id, key) DO UPDATE SET value_json=excluded.value_json, updated_at=excluded.updated_at
             """,
             (user_id, key, json.dumps(value, ensure_ascii=False), now_iso()),
+        )
+
+
+def get_app_setting(key: str, default: Optional[Any] = None) -> Any:
+    """user_settings와 같은 패턴이지만 사용자별이 아니라 앱 전체에 하나만 있는 설정용이다
+    (예: 자동 수집 일정)."""
+    init_db()
+    with connect() as con:
+        row = con.execute("SELECT value_json FROM app_settings WHERE key=?", (key,)).fetchone()
+    if not row:
+        return default
+    try:
+        return json.loads(row["value_json"])
+    except Exception:
+        return default
+
+
+def set_app_setting(key: str, value: Any) -> None:
+    init_db()
+    with connect() as con:
+        con.execute(
+            """
+            INSERT INTO app_settings(key, value_json, updated_at) VALUES (?, ?, ?)
+            ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json, updated_at=excluded.updated_at
+            """,
+            (key, json.dumps(value, ensure_ascii=False), now_iso()),
         )
 
 
