@@ -815,9 +815,10 @@ KHIDI_DEADLINE_SCHEMA = {
                 "type": "object",
                 "properties": {
                     "id": {"type": "string"},
+                    "start_date": {"type": ["string", "null"], "description": "YYYY-MM-DD, 본문에서 신청/접수 시작일을 찾지 못했으면 null"},
                     "end_date": {"type": ["string", "null"], "description": "YYYY-MM-DD, 본문에서 신청 마감일을 찾지 못했으면 null"},
                 },
-                "required": ["id", "end_date"],
+                "required": ["id", "start_date", "end_date"],
                 "additionalProperties": False,
             },
         },
@@ -827,11 +828,13 @@ KHIDI_DEADLINE_SCHEMA = {
 }
 
 KHIDI_DEADLINE_SYSTEM_PROMPT = (
-    "너는 한국 보건산업진흥원(KHIDI) 공고 본문을 읽고 '신청 마감일'을 찾는 어시스턴트다.\n"
-    "여러 날짜가 언급되어도 실제로 사업 신청/접수가 마감되는 날짜만 골라라 (공고일, 심사일, "
-    "발표일, 사업 수행기간의 종료일 등은 마감일이 아니다). 상시/수시 모집이거나 본문에 명확한 "
-    "마감일이 없으면 end_date를 null로 반환해라. 반드시 YYYY-MM-DD 형식으로, 전달받은 공고 "
-    "전부에 대해 결과를 반환해라."
+    "너는 한국 보건산업진흥원(KHIDI) 공고 본문을 읽고 '신청 접수 시작일'과 '신청 마감일'을 "
+    "찾는 어시스턴트다.\n"
+    "여러 날짜가 언급되어도 실제로 사업 신청/접수가 시작·마감되는 날짜만 골라라 (공고일, 심사일, "
+    "발표일, 사업 수행기간의 시작·종료일 등은 신청기간이 아니다). 상시/수시 모집이거나 본문에 "
+    "명확한 시작일/마감일이 없으면 해당 값을 null로 반환해라 — 하나만 명시되어 있으면(예: "
+    "마감일만 있고 시작일 언급이 없음) 나머지 하나만 null로 두고 찾은 값은 채워라. 반드시 "
+    "YYYY-MM-DD 형식으로, 전달받은 공고 전부에 대해 결과를 반환해라."
 )
 
 KHIDI_DEADLINE_CHUNK_SIZE = 20
@@ -844,17 +847,25 @@ def _strip_html_to_text(raw: str) -> str:
     return clean(BeautifulSoup(raw, "html.parser").get_text(" ", strip=True))
 
 
-def enrich_khidi_deadlines_with_ai(items: List[Dict[str, Any]], contents: Dict[str, str]) -> None:
-    """제목에서 마감일을 못 찾은 KHIDI 공고만, 본문 텍스트로 AI에게 마감일을 물어본다.
+def _valid_ymd_str(s: Optional[str]) -> bool:
+    if not s:
+        return False
+    m = re.match(r"^(\d{4})-(\d{2})-(\d{2})$", s)
+    return bool(m and valid_ymd(*map(int, m.groups())))
 
-    비용을 줄이기 위해 제목으로 이미 마감일을 찾은 공고는 애초에 대상에서 제외한다
-    (이 함수를 호출하는 쪽에서 items를 그렇게 필터링해서 넘긴다). 결과가 유효한
-    YYYY-MM-DD 형식이 아니면 무시하고, 원래대로 '날짜 미상' 처리를 유지한다.
-    items는 in-place로 갱신된다.
+
+def enrich_khidi_deadlines_with_ai(items: List[Dict[str, Any]], contents: Dict[str, str]) -> None:
+    """제목에서 시작일/마감일 중 못 찾은 게 있는 KHIDI 공고만, 본문 텍스트로 AI에게 물어본다.
+
+    비용을 줄이기 위해 제목으로 시작일·마감일을 이미 둘 다 찾은 공고는 애초에 대상에서
+    제외한다(이 함수를 호출하는 쪽에서 items를 그렇게 필터링해서 넘긴다). 이미 알고 있는
+    값은 덮어쓰지 않는다 — AI는 제목 파싱이 못 찾은 값만 보충한다. 결과가 유효한
+    YYYY-MM-DD 형식이 아니면 무시하고, 원래대로 '날짜 미상' 처리를 유지한다. items는
+    in-place로 갱신된다.
     """
     candidates = [
         it for it in items
-        if not it.get("end") and not it.get("rolling_confirmed")
+        if (not it.get("start") or not it.get("end")) and not it.get("rolling_confirmed")
         and len(contents.get(it["id"], "")) >= KHIDI_DEADLINE_MIN_CONTENT_LEN
     ]
     if not candidates:
@@ -886,14 +897,13 @@ def enrich_khidi_deadlines_with_ai(items: List[Dict[str, Any]], contents: Dict[s
 
         for r in data.get("results", []):
             it = by_id.get(r.get("id"))
-            end_date = r.get("end_date")
-            if not it or not end_date:
+            if not it:
                 continue
-            m = re.match(r"^(\d{4})-(\d{2})-(\d{2})$", end_date)
-            if not m or not valid_ymd(*map(int, m.groups())):
-                continue
-            it["end"] = end_date
-            it["dates_unknown"] = False
+            if not it.get("start") and _valid_ymd_str(r.get("start_date")):
+                it["start"] = r["start_date"]
+            if not it.get("end") and _valid_ymd_str(r.get("end_date")):
+                it["end"] = r["end_date"]
+                it["dates_unknown"] = False
 
 
 def collect_khidi_direct(bcfg: Dict[str, Any], common: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -949,7 +959,7 @@ def collect_khidi_direct(bcfg: Dict[str, Any], common: Dict[str, Any]) -> List[D
         if not start:
             item["start"] = None
         mark_dates_unknown_if_needed(item, title, start_was_known=bool(start))
-        if not end:
+        if not end or not start:
             contents[item["id"]] = _strip_html_to_text(html.unescape(row.findtext("content") or ""))
         out.append(item)
         if len(out) >= max_items:
