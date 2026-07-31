@@ -10,6 +10,7 @@ import json
 import mimetypes
 import os
 import re
+import threading
 import uuid
 from datetime import datetime
 from http.cookies import SimpleCookie
@@ -24,6 +25,7 @@ import collector
 import database
 import llm
 import recipe_engine
+import scheduler
 import uploads
 
 ROOT = Path(__file__).resolve().parent
@@ -34,6 +36,8 @@ SESSION_TTL_DAYS = 30
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 RECOLLECT_COOLDOWN_SEC = 300
 _last_recollect_at: Optional[datetime] = None
+_collect_lock = threading.Lock()
+_shutdown_event = threading.Event()
 
 ADMIN_EMAILS = {
     e.strip().lower() for e in os.environ.get("ADMIN_EMAILS", "").split(",") if e.strip()
@@ -297,6 +301,20 @@ class Handler(BaseHTTPRequestHandler):
                     })
                 self.send_json({"ok": True, "items": items})
                 return
+            if path == "/api/admin/scheduler-config":
+                user = current_user(self)
+                if not (user and user.get("is_admin")):
+                    self.send_json({"ok": False, "error": "관리자 권한이 필요합니다"}, status=403)
+                    return
+                cfg = scheduler.get_schedule()
+                last_run = scheduler.get_last_run()
+                self.send_json({
+                    "ok": True,
+                    "config": cfg,
+                    "last_run": last_run,
+                    "next_run_estimate": scheduler.next_run_estimate(cfg, last_run, datetime.now()),
+                })
+                return
             if path == "/api/admin/custom-sources":
                 user = current_user(self)
                 if not (user and user.get("is_admin")):
@@ -443,7 +461,10 @@ class Handler(BaseHTTPRequestHandler):
                     self.send_json({"ok": False, "error": f"너무 자주 요청했습니다. {wait}초 후 다시 시도해주세요."}, status=429)
                     return
                 _last_recollect_at = now
-                run = collector.collect_all(write_db=True)
+                run = scheduler.run_collection_locked(_collect_lock)
+                if run is None:
+                    self.send_json({"ok": False, "error": "지금 다른 수집이 진행 중입니다. 잠시 후 다시 시도해주세요."}, status=429)
+                    return
                 self.send_json({"ok": True, "count": len(run.items), "sources": run.sources})
                 return
             if path == "/api/admin/source-overrides":
@@ -473,6 +494,42 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 database.set_source_enabled_override(source_id, bool(data.get("enabled")))
                 self.send_json({"ok": True, "source_id": source_id})
+                return
+            if path == "/api/admin/scheduler-config":
+                user = current_user(self)
+                if not (user and user.get("is_admin")):
+                    self.send_json({"ok": False, "error": "관리자 권한이 필요합니다"}, status=403)
+                    return
+                data = self.read_json()
+                mode = data.get("mode")
+                if mode not in ("daily", "interval"):
+                    self.send_json({"ok": False, "error": "mode는 daily 또는 interval이어야 합니다"}, status=400)
+                    return
+                time_str = str(data.get("time") or "")
+                if not re.match(r"^([01]\d|2[0-3]):([0-5]\d)$", time_str):
+                    self.send_json({"ok": False, "error": "time은 HH:MM 형식이어야 합니다"}, status=400)
+                    return
+                days = data.get("days")
+                if not isinstance(days, list) or not days or any(d not in scheduler.WEEKDAY_CODES for d in days):
+                    self.send_json({"ok": False, "error": "days가 올바르지 않습니다"}, status=400)
+                    return
+                try:
+                    interval_hours = int(data.get("interval_hours"))
+                except (TypeError, ValueError):
+                    self.send_json({"ok": False, "error": "interval_hours는 정수여야 합니다"}, status=400)
+                    return
+                if not (1 <= interval_hours <= 168):
+                    self.send_json({"ok": False, "error": "interval_hours는 1~168 사이여야 합니다"}, status=400)
+                    return
+                cfg = {
+                    "enabled": bool(data.get("enabled")),
+                    "mode": mode,
+                    "time": time_str,
+                    "days": days,
+                    "interval_hours": interval_hours,
+                }
+                database.set_app_setting(scheduler.SETTING_KEY, cfg)
+                self.send_json({"ok": True, "config": cfg})
                 return
             if path == "/api/admin/custom-sources/discover":
                 user = current_user(self)
@@ -851,11 +908,18 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=int(os.environ.get("PORT", "8080")))
     args = parser.parse_args()
     bootstrap()
+    scheduler_thread = scheduler.start(_shutdown_event, _collect_lock)
     httpd = ThreadingHTTPServer((args.host, args.port), Handler)
     print(f"공고모아 실행 중: http://{args.host}:{args.port}")
     print(f"Root: {ROOT}")
     print("Stop: Ctrl+C")
-    httpd.serve_forever()
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        _shutdown_event.set()
+        scheduler_thread.join(timeout=5)
 
 
 if __name__ == "__main__":
