@@ -366,13 +366,73 @@ function renderAuthUI(){
   updateApiKeyStatus();
   fillLlmPreference();
   const sourcesPanel = $('#adminSourcesPanel');
+  const schedulerPanel = $('#adminSchedulerPanel');
   if(currentUserState?.is_admin){
     sourcesPanel?.classList.remove('hidden');
     loadAllSources();
+    schedulerPanel?.classList.remove('hidden');
+    loadSchedulerConfig();
   } else {
     sourcesPanel?.classList.add('hidden');
+    schedulerPanel?.classList.add('hidden');
   }
 }
+
+// ── 자동 수집 일정(관리자) ──
+function updateSchedulerModeFields(){
+  const form = $('#schedulerForm');
+  if(!form) return;
+  const mode = form.querySelector('input[name="mode"]:checked')?.value;
+  $('#schedulerDailyFields')?.classList.toggle('hidden', mode !== 'daily');
+  $('#schedulerIntervalFields')?.classList.toggle('hidden', mode !== 'interval');
+}
+
+async function loadSchedulerConfig(){
+  const form = $('#schedulerForm');
+  const statusEl = $('#schedulerStatus');
+  if(!form) return;
+  try{
+    const res = await api('/api/admin/scheduler-config');
+    const cfg = res.config || {};
+    form.querySelector('#schedulerEnabled').checked = !!cfg.enabled;
+    form.querySelector(`input[name="mode"][value="${cfg.mode === 'interval' ? 'interval' : 'daily'}"]`).checked = true;
+    form.querySelector('#schedulerTime').value = cfg.time || '03:00';
+    form.querySelectorAll('input[name="days"]').forEach(cb => {
+      cb.checked = (cfg.days || []).includes(cb.value);
+    });
+    form.querySelector('#schedulerIntervalHours').value = cfg.interval_hours || 6;
+    updateSchedulerModeFields();
+    if(statusEl){
+      const parts = [];
+      parts.push(cfg.enabled ? '사용 중' : '사용 안 함');
+      if(res.last_run) parts.push(`마지막 자동 수집: ${esc(res.last_run)}`);
+      if(res.next_run_estimate) parts.push(`다음 예정: ${esc(res.next_run_estimate)}`);
+      statusEl.textContent = parts.join(' · ');
+    }
+  }catch(err){ if(statusEl) statusEl.textContent = err.message; }
+}
+
+$('#schedulerForm')?.addEventListener('change', (e)=>{
+  if(e.target.name === 'mode') updateSchedulerModeFields();
+});
+
+$('#schedulerForm')?.addEventListener('submit', async (e)=>{
+  e.preventDefault();
+  const form = e.currentTarget;
+  const fd = new FormData(form);
+  const body = {
+    enabled: form.querySelector('#schedulerEnabled').checked,
+    mode: fd.get('mode'),
+    time: fd.get('time'),
+    days: fd.getAll('days'),
+    interval_hours: Number(fd.get('interval_hours')),
+  };
+  try{
+    await api('/api/admin/scheduler-config', {method:'POST', body:JSON.stringify(body)});
+    toast('자동 수집 일정 저장 완료', 'success');
+    loadSchedulerConfig();
+  }catch(err){ toast(err.message, 'error'); }
+});
 
 // ── 소스 관리(관리자): 기존 하드코딩 소스 + 커스텀 소스를 한 목록에 같이 보여준다 ──
 // 발견된 레시피는 확정 전까지 서버에 저장하지 않는다 — 확정 버튼을 누를 때 이 값을

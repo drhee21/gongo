@@ -195,6 +195,36 @@
         <h2>소스 상태</h2>
         <div id="sourcesTable"></div>
       </div>
+      <div class="panel hidden" id="adminSchedulerPanel">
+        <h2>자동 수집 일정 (관리자)</h2>
+        <p>서버가 계속 실행 중인 동안, 지정한 시간/주기에 맞춰 자동으로 공고를 수집합니다.</p>
+        <p class="meta" id="schedulerStatus"></p>
+        <form id="schedulerForm" class="form-grid">
+          <label class="checkbox wide"><input type="checkbox" name="enabled" id="schedulerEnabled" /> 자동 수집 사용</label>
+          <div class="wide scheduler-mode-row">
+            <label><input type="radio" name="mode" value="daily" checked /> 매일 지정 시간에</label>
+            <label><input type="radio" name="mode" value="interval" /> 일정 시간마다</label>
+          </div>
+          <div class="wide" id="schedulerDailyFields">
+            <label>시간<input type="time" name="time" id="schedulerTime" value="03:00" /></label>
+            <div class="scheduler-days">
+              <label><input type="checkbox" name="days" value="mon" checked /> 월</label>
+              <label><input type="checkbox" name="days" value="tue" checked /> 화</label>
+              <label><input type="checkbox" name="days" value="wed" checked /> 수</label>
+              <label><input type="checkbox" name="days" value="thu" checked /> 목</label>
+              <label><input type="checkbox" name="days" value="fri" checked /> 금</label>
+              <label><input type="checkbox" name="days" value="sat" checked /> 토</label>
+              <label><input type="checkbox" name="days" value="sun" checked /> 일</label>
+            </div>
+          </div>
+          <div class="wide hidden" id="schedulerIntervalFields">
+            <label>주기(시간)<input type="number" name="interval_hours" id="schedulerIntervalHours" min="1" max="168" value="6" /></label>
+          </div>
+          <div class="wide form-actions">
+            <button class="primary" type="submit">저장</button>
+          </div>
+        </form>
+      </div>
       <div class="panel hidden" id="adminSourcesPanel">
         <h2>소스 관리 (관리자)</h2>
         <p>이름과 공고 목록 페이지 URL만 넣으면 별도 코드 작성 없이 AI가 자동으로 수집 방법을 찾아냅니다. 미리보기를 확인하고 확정해야 실제 수집에 반영됩니다. 기존 소스는 아래 목록에서 URL을 바로 재정의할 수 있고, 커스텀 소스는 이름/URL 수정과 활성화·삭제까지 가능합니다.</p>
