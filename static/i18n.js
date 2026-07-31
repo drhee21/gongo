@@ -237,7 +237,7 @@ const TRANSLATIONS = {
   en: {
     pageTitle: 'GongoMoa — Government Support Program Search',
     brandTitle: 'GongoMoa',
-    brandSub: 'Government Support Program Search',
+    brandSub: 'Government Grant Search',
     navList: 'Notices',
     navFav: 'Favorites',
     navCal: 'Calendar',
