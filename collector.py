@@ -20,7 +20,7 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import urljoin, urlparse
 
 import requests
@@ -1529,6 +1529,33 @@ def _collect_via_stored_recipe(source_id: str, common: Dict[str, Any], cap: int)
     return recipe_engine.run_recipe(source_id, stored["recipe"], common)[:cap]
 
 
+# collect_all()에서 소스 하나가 실패했을 때, 재시도로도 못 살아나면 이번 실행의
+# 결과에서 빠진 채로 남는다 — 그런 상태(state)의 소스는 DB에 남아있던 기존 데이터를
+# upsert_notices()의 prune 단계에서 지우지 않고 보존한다. 반대로 "비활성화"(관리자가
+# 일부러 끔)나 "레시피 없음"(아직 한 번도 발견된 적 없는 신규 커스텀 소스)은 실패가
+# 아니라 의도된/자연스러운 상태이므로 기존 동작(정리 대상)을 그대로 둔다.
+PRESERVE_ON_FAILURE_STATES = {"오류", "차단(robots)"}
+
+
+def _run_with_retry(fn: Callable[[], Any], attempts: int = 2, delay_sec: float = 2.0) -> Any:
+    """소스 수집 함수 하나를 실행하고, 실패하면 한 번 더 시도한다(기본 총 2회).
+
+    robots.txt 차단(PermissionError)은 재시도해도 결과가 달라지지 않으므로 즉시
+    그대로 던진다 — 재시도 대상은 타임아웃/일시적 파싱 실패 같은 우발적 오류로 좁힌다."""
+    last_exc: Optional[Exception] = None
+    for i in range(attempts):
+        try:
+            return fn()
+        except PermissionError:
+            raise
+        except Exception as e:
+            last_exc = e
+            if i < attempts - 1:
+                time.sleep(delay_sec)
+    assert last_exc is not None
+    raise last_exc
+
+
 def _apply_source_override(sub_cfg: Dict[str, Any], source_id: str, overrides: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
     """관리자가 재정의한 이름/URL/활성화 상태가 있으면 해당 소스 설정에 덮어쓴다."""
     override = overrides.get(source_id)
@@ -1557,7 +1584,7 @@ def collect_all(write_db: bool = True) -> CollectRun:
     bcfg = cfg.get("bizinfo", {})
     if bcfg.get("enabled", False):
         try:
-            routed = collect_bizinfo({**common, **bcfg}, cfg.get("route_from_bizinfo", {}))
+            routed = _run_with_retry(lambda: collect_bizinfo({**common, **bcfg}, cfg.get("route_from_bizinfo", {})))
             for sid in ["bizinfo", "biohub", "khidi"]:
                 items = routed.get(sid, [])[:cap]
                 run.record(sid, items, "정상" if items or sid == "bizinfo" else "0건")
@@ -1573,7 +1600,7 @@ def collect_all(write_db: bool = True) -> CollectRun:
     gcfg = cfg.get("g2b", {})
     if gcfg.get("enabled", False):
         try:
-            run.record("g2b", collect_g2b({**common, **gcfg})[:cap], "정상")
+            run.record("g2b", _run_with_retry(lambda: collect_g2b({**common, **gcfg}))[:cap], "정상")
         except Exception as e:
             run.record("g2b", [], "오류", e)
     else:
@@ -1588,7 +1615,7 @@ def collect_all(write_db: bool = True) -> CollectRun:
         board_list_urls["kstartup"] = clean(kcfg.get("list_url") or KSTARTUP_DEFAULT_URL)
     if kcfg.get("enabled", False):
         try:
-            items = _collect_via_stored_recipe("kstartup", common, cap)
+            items = _run_with_retry(lambda: _collect_via_stored_recipe("kstartup", common, cap))
             run.record("kstartup", items, "정상", name=kcfg.get("name"), method="레시피")
         except Exception as e:
             run.record("kstartup", [], "오류", e, name=kcfg.get("name"))
@@ -1607,19 +1634,19 @@ def collect_all(write_db: bool = True) -> CollectRun:
             continue
         try:
             if sid == "biohub_direct":
-                items = _collect_via_stored_recipe(sid, common, cap)
+                items = _run_with_retry(lambda: _collect_via_stored_recipe(sid, common, cap))
                 run.record(sid, items, "정상", name=board_cfg.get("name") or "서울바이오허브(직접)", method="레시피")
             elif sid == "nrf":
-                items = _collect_via_stored_recipe(sid, common, cap)
+                items = _run_with_retry(lambda: _collect_via_stored_recipe(sid, common, cap))
                 run.record(sid, items, "정상", name=board_cfg.get("name") or "한국연구재단", method="레시피")
             elif sid == "kddf":
-                items = _collect_via_stored_recipe(sid, common, cap)
+                items = _run_with_retry(lambda: _collect_via_stored_recipe(sid, common, cap))
                 run.record(sid, items, "정상", name=board_cfg.get("name") or "국가신약개발사업단", method="레시피")
             elif sid == "khidi_direct":
-                items = collect_khidi_direct(board_cfg, common)[:cap]
+                items = _run_with_retry(lambda: collect_khidi_direct(board_cfg, common))[:cap]
                 run.record(sid, items, "정상", name=board_cfg.get("name") or "보건산업진흥원/KHIDI", method="전용 파서(API)")
             else:
-                items = collect_board(sid, board_cfg, common)[:cap]
+                items = _run_with_retry(lambda: collect_board(sid, board_cfg, common))[:cap]
                 run.record(sid, items, "정상", name=board_cfg.get("name"), method="게시판")
         except PermissionError as e:
             run.record(sid, [], "차단(robots)", e, name=board_cfg.get("name"), method="게시판")
@@ -1640,7 +1667,7 @@ def collect_all(write_db: bool = True) -> CollectRun:
             run.record(sid, [], "레시피 없음", name=cs["name"], method="레시피")
             continue
         try:
-            items = recipe_engine.run_recipe(sid, stored["recipe"], common)[:cap]
+            items = _run_with_retry(lambda: recipe_engine.run_recipe(sid, stored["recipe"], common))[:cap]
             run.record(sid, items, "정상", name=cs["name"], method="레시피")
         except PermissionError as e:
             run.record(sid, [], "차단(robots)", e, name=cs["name"], method="레시피")
@@ -1675,7 +1702,15 @@ def collect_all(write_db: bool = True) -> CollectRun:
         if recovered_any:
             run.items = merge_duplicate_notices(run.items)
 
-        database.upsert_notices(run.items, prune=not used_sample)
+        # 재시도까지 실패한 소스는 이번 실행 결과에 아무 항목도 없다 — 그렇다고
+        # DB에 남아있던 기존 데이터까지 지우면 일시적 오류 한 번에 그 소스의 공고가
+        # 전부 사라진다. 그런 소스의 기존 id는 prune 대상에서 제외해 보존한다.
+        extra_keep_ids: List[str] = []
+        for sid, entry in run.sources.items():
+            if entry.get("state") in PRESERVE_ON_FAILURE_STATES:
+                extra_keep_ids.extend(database.get_notice_ids_for_source(sid))
+
+        database.upsert_notices(run.items, prune=not used_sample, extra_keep_ids=extra_keep_ids)
         database.record_source_history(run.sources)
         database.replace_source_status(run.sources)
     return run

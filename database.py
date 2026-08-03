@@ -218,7 +218,7 @@ def init_db() -> None:
         _ensure_column(con, "source_overrides", "enabled_override", "INTEGER")
 
 
-def upsert_notices(items: Iterable[Dict[str, Any]], prune: bool = True) -> int:
+def upsert_notices(items: Iterable[Dict[str, Any]], prune: bool = True, extra_keep_ids: Optional[Iterable[str]] = None) -> int:
     """Insert/update notices and their per-site source list.
 
     `prune=True` removes notices that are no longer part of the current
@@ -227,6 +227,11 @@ def upsert_notices(items: Iterable[Dict[str, Any]], prune: bool = True) -> int:
     accumulate forever. Callers should pass `prune=False` when `items` is a
     partial/fallback set (e.g. the sample data shown when every real source
     fails) so a temporary outage doesn't wipe out previously collected data.
+
+    `extra_keep_ids` are notice ids to exempt from pruning even though they
+    aren't in `items` this run -- e.g. ids belonging to a source that failed
+    (even after retry) this run, so a transient collection failure doesn't
+    delete that source's previously-collected notices.
     """
     init_db()
     items = list(items)
@@ -291,13 +296,24 @@ def upsert_notices(items: Iterable[Dict[str, Any]], prune: bool = True) -> int:
                     (nid, sid, s.get("url") or ""),
                 )
             count += 1
-        if prune and ids:
-            placeholders = ",".join("?" * len(ids))
+        keep_ids = ids + [i for i in (extra_keep_ids or []) if i]
+        if prune and keep_ids:
+            placeholders = ",".join("?" * len(keep_ids))
             con.execute(
                 f"DELETE FROM notices WHERE id NOT IN ({placeholders}) AND id NOT IN (SELECT notice_id FROM favorites)",
-                ids,
+                keep_ids,
             )
     return count
+
+
+def get_notice_ids_for_source(source_id: str) -> List[str]:
+    """이 소스가 이전에 수집한 공고 id 전부를 돌려준다. collect_all()이 이번 실행에서
+    이 소스가 (재시도 포함) 실패했을 때, upsert_notices()의 prune 단계에서 지우지
+    않도록 보존할 id 목록을 만드는 데 쓴다."""
+    init_db()
+    with connect() as con:
+        rows = con.execute("SELECT notice_id FROM notice_sources WHERE source=?", (source_id,)).fetchall()
+    return [r["notice_id"] for r in rows]
 
 
 def replace_source_status(statuses: Dict[str, Dict[str, Any]]) -> None:
