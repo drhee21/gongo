@@ -158,6 +158,10 @@ const TRANSLATIONS = {
     budgetDefault: '공고 참조',
     ddayN: 'D-{n}',
 
+    paginationShowing: '{from}-{to} / 전체 {total}건',
+    paginationPrev: '이전',
+    paginationNext: '다음',
+
     emptyNoticesFiltered: '조건에 맞는 공고가 없습니다.',
     emptyFavLoggedIn: '관심 공고가 없습니다.',
     emptyFavLoggedOut: '로그인하면 관심 공고를 저장할 수 있습니다.',
@@ -387,6 +391,10 @@ const TRANSLATIONS = {
     eligRegion: 'Region: {regions}',
     budgetDefault: 'See notice',
     ddayN: 'D-{n}',
+
+    paginationShowing: 'Showing {from}-{to} of {total}',
+    paginationPrev: 'Prev',
+    paginationNext: 'Next',
 
     emptyNoticesFiltered: 'No notices match your filters.',
     emptyFavLoggedIn: 'No favorites yet.',

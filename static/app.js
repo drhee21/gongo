@@ -29,6 +29,9 @@ let rawSources = [];
 let company = {};
 let currentUserState = null;
 
+const PAGE_SIZE = 50;
+let currentPage = 1;
+
 function api(path, opts={}){
   return fetch(path, {headers:{'Content-Type':'application/json'}, credentials:'same-origin', ...opts}).then(async r=>{
     const data = await r.json().catch(()=>({ok:false,error:t('jsonParseError')}));
@@ -152,9 +155,32 @@ function filtered(list){
   });
 }
 
+function renderPagination(total){
+  const box = $('#noticePagination');
+  if(!box) return;
+  const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  if(currentPage > pageCount) currentPage = pageCount;
+  if(currentPage < 1) currentPage = 1;
+
+  if(total === 0){
+    box.classList.add('hidden');
+    return;
+  }
+  box.classList.remove('hidden');
+
+  const from = (currentPage - 1) * PAGE_SIZE + 1;
+  const to = Math.min(currentPage * PAGE_SIZE, total);
+  $('#pageStatus').textContent = t('paginationShowing', {from: from.toLocaleString(), to: to.toLocaleString(), total: total.toLocaleString()});
+  $('#pagePrev').disabled = currentPage <= 1;
+  $('#pageNext').disabled = currentPage >= pageCount;
+}
+
 function renderList(){
   const list = filtered(notices);
-  $('#noticeList').innerHTML = list.length ? list.map(noticeHTML).join('') : `<div class="empty">${esc(t('emptyNoticesFiltered'))}</div>`;
+  renderPagination(list.length);
+  const pageStart = (currentPage - 1) * PAGE_SIZE;
+  const pageItems = list.slice(pageStart, pageStart + PAGE_SIZE);
+  $('#noticeList').innerHTML = pageItems.length ? pageItems.map(noticeHTML).join('') : `<div class="empty">${esc(t('emptyNoticesFiltered'))}</div>`;
   bindNoticeEvents($('#noticeList'));
 
   const favs = notices.filter(x=>x.favorite);
@@ -168,6 +194,11 @@ function renderList(){
   $('#kpiFav').textContent = favs.length;
   renderAiFitMini();
   renderCalendar();
+}
+
+function onFilterChange(){
+  currentPage = 1;
+  renderList();
 }
 
 function renderAiFitMini(){
@@ -329,6 +360,7 @@ function renderSources(){
 }
 
 async function loadAll(){
+  currentPage = 1;
   const [n, s, meRes] = await Promise.all([api('/api/notices'), api('/api/sources'), api('/api/auth/me')]);
   notices = n.items || [];
   sources = s.items || [];
@@ -752,7 +784,9 @@ $$('.nav').forEach(btn=>btn.addEventListener('click',()=>{
   $$('.view').forEach(v=>v.classList.remove('active'));
   $(`#view-${btn.dataset.view}`).classList.add('active');
 }));
-['q','sourceFilter','statusFilter','aiFitFilter'].forEach(id=>$('#'+id)?.addEventListener('input', renderList));
+['q','sourceFilter','statusFilter','aiFitFilter'].forEach(id=>$('#'+id)?.addEventListener('input', onFilterChange));
+$('#pagePrev')?.addEventListener('click', ()=>{ if(currentPage > 1){ currentPage--; renderList(); } });
+$('#pageNext')?.addEventListener('click', ()=>{ currentPage++; renderList(); });
 $('#calPrev')?.addEventListener('click', ()=>{
   calViewDate.m--; if(calViewDate.m<1){ calViewDate.m=12; calViewDate.y--; }
   renderCalendar();
