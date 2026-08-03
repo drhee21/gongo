@@ -61,6 +61,7 @@
       "enabled": true,
       "name": "서울바이오허브(직접)",
       "base_url": "https://www.seoulbiohub.kr",
+      "list_url": "https://www.seoulbiohub.kr/front/supportManageReq/supportManageListPage.do?miv_pageNo=1&miv_pageSize=80",
       "org": "서울바이오허브",
       "category": "바이오·헬스",
       "seed_urls": [
