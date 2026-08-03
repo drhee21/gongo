@@ -93,7 +93,7 @@ const TRANSLATIONS = {
     bizinfoKeyPlaceholder: '발급받은 기업마당 API 키 (비워두면 변경 없음)',
 
     aiFitSectionTitle: 'AI 맞춤 분석',
-    aiFitSectionDesc: '회사 정보를 저장한 뒤, 현재 올라와 있는 공고 전체를 Claude API로 분석해서 공고별로 적합/확인/부적합을 판정합니다. 공고 건수에 따라 수 분 걸릴 수 있습니다.',
+    aiFitSectionDesc: '회사 정보를 저장한 뒤, 현재 올라와 있는 공고 전체를 등록된 AI 모델로 분석해서 공고별로 적합/확인/부적합을 판정합니다. 공고 건수에 따라 수 분 걸릴 수 있습니다.',
     btnRunAiFit: 'AI로 맞춤 공고 분석 실행',
     btnAiAnalyzing: 'AI 분석 중...',
 
@@ -325,7 +325,7 @@ const TRANSLATIONS = {
     bizinfoKeyPlaceholder: 'Your Bizinfo API key (leave blank to keep unchanged)',
 
     aiFitSectionTitle: 'AI Fit Analysis',
-    aiFitSectionDesc: 'After saving company info, this analyzes every current notice via the Claude API and judges each as fit/unsure/unfit. May take a few minutes depending on notice count.',
+    aiFitSectionDesc: 'After saving company info, this analyzes every current notice using your registered AI model and judges each as fit/unsure/unfit. May take a few minutes depending on notice count.',
     btnRunAiFit: 'Run AI Fit Analysis',
     btnAiAnalyzing: 'Analyzing with AI...',
 
