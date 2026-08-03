@@ -16,7 +16,6 @@
     "enabled": true,
     "method": "html",
     "list_url": "https://www.k-startup.go.kr/web/contents/bizpbanc-ongoing.do",
-    "max_items": 80,
     "_note": "API 키 없이 K-Startup 모집중 웹페이지 HTML을 직접 크롤링합니다."
   },
   "g2b": {
