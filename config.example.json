@@ -5,6 +5,7 @@
     "timeout_sec": 20,
     "request_delay_sec": 0.8,
     "max_items_per_source": 80,
+    "_max_items_per_source_note": "0 이하로 설정하면 해당 소스가 가진 공고를 전부 가져옵니다(무제한).",
     "respect_robots": true
   },
   "bizinfo": {

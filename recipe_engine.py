@@ -284,7 +284,7 @@ def run_recipe(source_id: str, recipe: Dict[str, Any], common: Dict[str, Any]) -
     fmt = fetch.get("format", "html")
     timeout = int(common.get("timeout_sec", 20))
     delay = float(common.get("request_delay_sec", 0.8))
-    max_items = int(common.get("max_items_per_source", 60))
+    max_items = collector.resolve_max_items(common.get("max_items_per_source", 60))
     field_map = recipe["field_map"]
     item_selector = recipe["item_selector"]
 
@@ -296,9 +296,14 @@ def run_recipe(source_id: str, recipe: Dict[str, Any], common: Dict[str, Any]) -
 
     detail_robots_checked = False
 
+    # max_items_per_source가 0(=무제한)이면 페이지네이션도 20페이지에서 끊기지
+    # 않아야 "전체 수집"이라는 말이 실제로 성립한다. 페이지가 실제로 끝나면
+    # page_items가 비거나(위 stagnation 체크) 늘어나지 않아 어차피 멈추므로,
+    # 상한만 넉넉하게 늘려도 무한 루프가 되지는 않는다.
+    page_cap = 1000 if max_items >= collector.UNLIMITED_ITEMS else 20
     out: List[Dict[str, Any]] = []
     prev_count = 0
-    for i, url in enumerate(_paged_urls(recipe)):
+    for i, url in enumerate(_paged_urls(recipe, max_pages=page_cap)):
         page_items: List[Dict[str, Any]] = []
 
         if fmt == "html":

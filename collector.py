@@ -63,6 +63,25 @@ def is_blank_key(value: Any) -> bool:
     return (not s) or ("여기에" in s) or ("YOUR_" in s.upper()) or s.upper() in {"TODO", "NONE", "NULL"}
 
 
+# config.json의 max_items_per_source(또는 소스별 max_items)를 0 이하로 설정하면
+# "제한 없음"으로 취급한다. 각 수집기의 페이지네이션 루프는 이 값과 무관하게
+# 빈 페이지/사이트가 알려주는 마지막 페이지/증가 없음 등 자체 종료 조건을 갖고
+# 있으므로, 사실상 무제한으로 취급해도 무한 루프가 되지 않는다 — 다만 값 자체를
+# 그대로 10억처럼 두면 KHIDI rowCnt처럼 API 파라미터로 그대로 나가는 곳이 있어
+# 과도하게 큰 숫자를 보낼 수 있으므로, 매우 크되 상식적인 값으로 대체한다.
+UNLIMITED_ITEMS = 100_000
+
+
+def resolve_max_items(value: Any, default: int = 80) -> int:
+    """max_items_per_source 설정값을 해석한다. 0 이하(또는 값이 없거나 잘못됨)면
+    UNLIMITED_ITEMS를 돌려줘 사실상 전체 수집이 되게 한다."""
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        n = default
+    return UNLIMITED_ITEMS if n <= 0 else n
+
+
 def load_config() -> Dict[str, Any]:
     if not CONFIG_PATH.exists():
         example = ROOT / "config.example.json"
@@ -256,7 +275,7 @@ def collect_bizinfo(cfg: Dict[str, Any], route: Dict[str, List[str]]) -> Dict[st
     key = auth.decrypt_secret(key_enc)
 
     page_unit = int(cfg.get("page_unit", 200))
-    max_items = int(cfg.get("max_items_per_source", 80))
+    max_items = resolve_max_items(cfg.get("max_items_per_source", 80))
     timeout = cfg.get("timeout_sec", 20)
     delay = cfg.get("request_delay_sec", 0.8)
 
@@ -341,7 +360,7 @@ def collect_g2b(cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
         return []
 
     days = int(cfg.get("days", 3))
-    max_items = int(cfg.get("max_items_per_source", 80))
+    max_items = resolve_max_items(cfg.get("max_items_per_source", 80))
     num_of_rows = int(cfg.get("page_unit", 500))
     timeout = cfg.get("timeout_sec", 20)
     delay = cfg.get("request_delay_sec", 0.3)
@@ -548,7 +567,7 @@ def collect_kstartup(cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
         raise PermissionError("robots.txt 차단")
 
     timeout = cfg.get("timeout_sec", 20)
-    max_items = int(cfg.get("max_items", cfg.get("max_items_per_source", 80)))
+    max_items = resolve_max_items(cfg.get("max_items", cfg.get("max_items_per_source", 80)))
 
     out: List[Dict[str, Any]] = []
     last_error: Optional[Exception] = None
@@ -699,7 +718,7 @@ def collect_board(source_id: str, bcfg: Dict[str, Any], common: Dict[str, Any]) 
             else:
                 mark_dates_unknown_if_needed(item, row_text)
         out.append(item)
-        if len(out) >= int(common.get("max_items_per_source", 60)):
+        if len(out) >= resolve_max_items(common.get("max_items_per_source", 60)):
             break
     if not out:
         raise RuntimeError("0건 파싱: link_pattern 또는 게시판 구조 확인 필요")
@@ -732,7 +751,7 @@ def collect_kddf(bcfg: Dict[str, Any], common: Dict[str, Any]) -> List[Dict[str,
     # 계산하므로 기본은 수집하지 않는다. config에서 include_state:true로 켜면
     # raw 데이터에만 남긴다(화면 로직에는 아직 반영하지 않음).
     include_state = bool(bcfg.get("include_state", False))
-    max_items = int(common.get("max_items_per_source", 60))
+    max_items = resolve_max_items(common.get("max_items_per_source", 60))
     timeout = common.get("timeout_sec", 20)
     delay = float(common.get("request_delay_sec", 0.8))
 
@@ -923,7 +942,7 @@ def collect_khidi_direct(bcfg: Dict[str, Any], common: Dict[str, Any]) -> List[D
     # 그래서 "페이지네이션"은 곧 rowCnt를 원하는 최대 건수만큼 요청하는 것과 같다.
     # 다만 이 API는 rowCnt=N을 주면 실제로는 N-1건만 돌려주는 off-by-one이 있어서
     # (rowCnt=1 -> 0건, rowCnt=2 -> 1건 ... 실측으로 확인) 1을 더해서 요청한다.
-    max_items = int(common.get("max_items_per_source", 80))
+    max_items = resolve_max_items(common.get("max_items_per_source", 80))
     params = {"menuId": menu_id, "rowCnt": max_items + 1}
     r = SESSION.get(KHIDI_FEED_URL, params=params, timeout=common.get("timeout_sec", 20))
     r.raise_for_status()
@@ -1050,7 +1069,7 @@ def collect_nrf_iris(bcfg: Dict[str, Any], common: Dict[str, Any]) -> List[Dict[
         raise PermissionError("robots.txt 차단")
 
     timeout = common.get("timeout_sec", 20)
-    max_items = int(common.get("max_items_per_source", 60))
+    max_items = resolve_max_items(common.get("max_items_per_source", 60))
     sep = "&" if "?" in list_url else "?"
 
     out: List[Dict[str, Any]] = []
@@ -1281,7 +1300,7 @@ def collect_biohub_direct(bcfg: Dict[str, Any], common: Dict[str, Any]) -> List[
         raise RuntimeError("비활성화됨")
     base_url = clean(bcfg.get("base_url")) or "https://www.seoulbiohub.kr"
     timeout = common.get("timeout_sec", 20)
-    max_items = int(common.get("max_items_per_source", 80))
+    max_items = resolve_max_items(common.get("max_items_per_source", 80))
     delay = float(bcfg.get("detail_delay_sec", 0.06))
 
     if common.get("respect_robots", True):
@@ -1531,7 +1550,7 @@ def collect_all(write_db: bool = True) -> CollectRun:
     overrides = database.get_source_overrides()
     run = CollectRun()
     common = cfg.get("common", {})
-    cap = int(common.get("max_items_per_source", 60))
+    cap = resolve_max_items(common.get("max_items_per_source", 60))
     board_list_urls: Dict[str, str] = {}
 
     # Bizinfo and routed institutional notices.
