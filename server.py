@@ -440,8 +440,14 @@ class Handler(BaseHTTPRequestHandler):
                     self.send_json({"ok": False, "error": "API 키를 입력해주세요"}, status=400)
                     return
                 label = str(data.get("label") or "").strip() or model["label"]
+                is_first_profile = not database.list_llm_key_profiles(user["id"])
                 profile_id = database.create_llm_key_profile(user["id"], label, model_id, auth.encrypt_secret(raw_key))
-                database.set_active_llm_profile(user["id"], profile_id)
+                # 처음 등록하는 키만 자동으로 활성화한다 — 이미 쓰고 있는 키가 있는데
+                # 새 키를 추가했다고 조용히 바뀌면 사용자가 모르는 새 다른 모델/키로
+                # 전환되어 버린다. 이미 키가 있으면 명시적으로 "이 키로 적용"을
+                # 눌러야 바뀐다.
+                if is_first_profile:
+                    database.set_active_llm_profile(user["id"], profile_id)
                 self.send_json({"ok": True, "user": user_public(user)})
                 return
             if path == "/api/me/llm-profiles/activate":

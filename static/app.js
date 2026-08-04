@@ -750,12 +750,18 @@ function renderLlmProfiles(){
   const sel = $('#llmProfileSelect');
   if(!sel) return;
   const profiles = currentUserState?.llm_profiles || [];
+  const activateBtn = $('#btnActivateLlmProfile');
+  const deleteBtn = $('#btnDeleteLlmProfile');
   if(!profiles.length){
     sel.innerHTML = `<option value="">${esc(t('llmNoProfiles'))}</option>`;
     sel.disabled = true;
+    if(activateBtn) activateBtn.disabled = true;
+    if(deleteBtn) deleteBtn.disabled = true;
     return;
   }
   sel.disabled = false;
+  if(activateBtn) activateBtn.disabled = false;
+  if(deleteBtn) deleteBtn.disabled = false;
   sel.innerHTML = profiles.map(p =>
     `<option value="${esc(p.id)}">${esc(p.label)} — ${esc(llmModelLabel(p.model_id))}</option>`
   ).join('');
@@ -869,8 +875,8 @@ $('#btnAiFit')?.addEventListener('click', async ()=>{
   }
 });
 
-$('#llmProfileSelect')?.addEventListener('change', async e=>{
-  const profileId = e.target.value;
+$('#btnActivateLlmProfile')?.addEventListener('click', async ()=>{
+  const profileId = $('#llmProfileSelect')?.value;
   if(!profileId) return;
   try{
     const res = await api('/api/me/llm-profiles/activate', {method:'POST', body:JSON.stringify({profile_id: profileId})});
@@ -883,13 +889,14 @@ $('#llmProfileForm')?.addEventListener('submit', async e=>{
   e.preventDefault();
   const form = e.currentTarget;
   const data = Object.fromEntries(new FormData(form).entries());
+  const hadNoProfiles = !(currentUserState?.llm_profiles?.length);
   try{
     const res = await api('/api/me/llm-profiles', {method:'POST', body:JSON.stringify(data)});
     currentUserState = res.user;
     form.reset();
     renderLlmProfiles();
     updateApiKeyStatus();
-    toast(t('toastLlmProfileAdded'), 'success');
+    toast(t(hadNoProfiles ? 'toastLlmProfileAdded' : 'toastLlmProfileAddedInactive'), 'success');
   }catch(err){ toast(err.message, 'error'); }
 });
 $('#btnDeleteLlmProfile')?.addEventListener('click', async ()=>{
