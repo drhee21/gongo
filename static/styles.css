@@ -34,9 +34,14 @@ button:disabled{opacity:.55;cursor:not-allowed}
 .filters{display:grid;grid-template-columns:1fr 160px 160px 160px;gap:10px;margin-bottom:16px}
 input,select{background:var(--panel2);border:1px solid var(--line);color:var(--text);border-radius:10px;padding:11px 12px;font-size:14px}
 .list{display:grid;gap:10px}
-.pagination{display:flex;align-items:center;justify-content:center;gap:14px;margin-top:16px}
+/* 이전/다음 버튼을 항상 같은 자리에 고정한다 — status 텍스트 길이(예: "1-50"
+   대 "451-534")가 페이지마다 달라지는데, 셋을 한 덩어리로 가운데 정렬하면
+   그 길이 차이만큼 버튼 위치가 좌우로 흔들린다. status에 고정 폭과 가운데
+   정렬을 줘서, 셋을 하나로 묶어 가운데 정렬해도 버튼 위치가 안 흔들리게 한다. */
+.pagination{display:flex;align-items:center;justify-content:center;gap:10px;margin-top:16px}
+.pagination button{flex:0 0 auto}
 .pagination button:disabled{opacity:.4;cursor:default}
-.pagination-status{color:var(--muted);font-size:14px}
+.pagination-status{display:inline-block;min-width:170px;text-align:center;color:var(--muted);font-size:14px}
 .notice{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px;display:grid;grid-template-columns:72px 1fr auto;gap:14px;align-items:start;box-shadow:var(--shadow)}
 .src-group{display:flex;flex-direction:column;gap:4px}
 .src{font-size:12px;color:var(--brand);border:1px solid rgba(13,148,136,.35);border-radius:999px;padding:5px 8px;text-align:center}
