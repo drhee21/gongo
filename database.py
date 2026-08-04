@@ -7,7 +7,7 @@ import sqlite3
 import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Set
 
 ROOT = Path(__file__).resolve().parent
 DATA_DIR = ROOT / "data"
@@ -167,6 +167,15 @@ def init_db() -> None:
                 PRIMARY KEY (user_id, notice_id),
                 FOREIGN KEY(notice_id) REFERENCES notices(id) ON DELETE CASCADE,
                 FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS notice_funding_classification (
+                notice_id TEXT PRIMARY KEY,
+                verdict TEXT NOT NULL,
+                method TEXT NOT NULL,
+                reason TEXT,
+                classified_at TEXT NOT NULL,
+                FOREIGN KEY(notice_id) REFERENCES notices(id) ON DELETE CASCADE
             );
 
             CREATE TABLE IF NOT EXISTS llm_provider_keys (
@@ -745,6 +754,68 @@ def get_ai_fit_map(user_id: str, profile_hash: str) -> Dict[str, Dict[str, str]]
             "SELECT notice_id, fit, reason FROM ai_fit WHERE user_id=? AND profile_hash=?", (user_id, profile_hash)
         ).fetchall()
     return {r["notice_id"]: {"fit": r["fit"], "reason": r["reason"]} for r in rows}
+
+
+def get_unclassified_ids(ids: Iterable[str]) -> List[str]:
+    """전달된 notice id 중 아직 notice_funding_classification에 없는(= 한 번도
+    분류되지 않은) id만 돌려준다. collect_all()이 매번 전체를 다시 분류하지
+    않고 새 공고만 LLM에 보내도록 하는 데 쓴다."""
+    ids = [i for i in ids if i]
+    if not ids:
+        return []
+    init_db()
+    with connect() as con:
+        placeholders = ",".join("?" * len(ids))
+        classified = {
+            r["notice_id"]
+            for r in con.execute(
+                f"SELECT notice_id FROM notice_funding_classification WHERE notice_id IN ({placeholders})", ids
+            ).fetchall()
+        }
+    return [i for i in ids if i not in classified]
+
+
+def save_funding_classifications(results: Dict[str, Dict[str, str]], method: str) -> None:
+    """{notice_id: {"verdict": "keep"|"exclude", "reason": str}} 형태의 분류 결과를
+    저장한다. `method`는 "rule" 또는 "llm" — 나중에 어떤 경로로 판정됐는지 구분하기
+    위함이다."""
+    if not results:
+        return
+    init_db()
+    ts = now_iso()
+    with connect() as con:
+        existing_ids = {
+            row["id"]
+            for row in con.execute(
+                f"SELECT id FROM notices WHERE id IN ({','.join('?' * len(results))})",
+                list(results.keys()),
+            ).fetchall()
+        }
+        for nid, r in results.items():
+            if nid not in existing_ids:
+                continue
+            con.execute(
+                """
+                INSERT INTO notice_funding_classification(notice_id, verdict, method, reason, classified_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(notice_id) DO UPDATE SET
+                    verdict=excluded.verdict,
+                    method=excluded.method,
+                    reason=excluded.reason,
+                    classified_at=excluded.classified_at
+                """,
+                (nid, r.get("verdict"), method, r.get("reason"), ts),
+            )
+
+
+def get_excluded_notice_ids() -> Set[str]:
+    """verdict='exclude'로 분류된 notice id 전체. 공고 목록 API가 이 id들을
+    걸러내는 데 쓴다 — 아직 분류되지 않은 공고는 여기 포함되지 않으므로
+    기본적으로 화면에 계속 보인다(판정 전에 조용히 숨겨지지 않는다)."""
+    init_db()
+    with connect() as con:
+        rows = con.execute("SELECT notice_id FROM notice_funding_classification WHERE verdict='exclude'").fetchall()
+    return {r["notice_id"] for r in rows}
 
 
 def get_user_setting(user_id: str, key: str, default: Optional[Any] = None) -> Any:

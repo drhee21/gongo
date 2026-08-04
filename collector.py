@@ -28,6 +28,7 @@ from bs4 import BeautifulSoup
 
 import auth
 import database
+import funding_classifier
 import llm
 
 ROOT = Path(__file__).resolve().parent
@@ -1617,6 +1618,12 @@ def collect_all(write_db: bool = True) -> CollectRun:
         try:
             items = _run_with_retry(lambda: _collect_via_stored_recipe("kstartup", common, cap))
             run.record("kstartup", items, "정상", name=kcfg.get("name"), method="레시피")
+            try:
+                funding_classifier.classify_new_kstartup_notices(items, common)
+            except Exception:
+                # 판정 실패가 수집 자체를 실패로 만들면 안 된다 — 판정 전 공고는
+                # 기본적으로 화면에 계속 보이므로 조용히 다음 실행에서 재시도된다.
+                pass
         except Exception as e:
             run.record("kstartup", [], "오류", e, name=kcfg.get("name"))
     else:

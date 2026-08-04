@@ -124,8 +124,15 @@ def canonical_source_id(source_id: str) -> str:
     }.get(source_id, source_id)
 
 def add_runtime_fields(items):
+    # 스타트업 자금·지원과 무관하다고 판정된 공고(교육/행사/일반 중소기업 대상 등)는
+    # 항상 걸러진다 — 토글로 다시 보이게 할 수 있는 옵션이 아니라 기본 동작이다.
+    # 아직 판정되지 않은 공고(새로 수집됐지만 아직 분류 전)는 여기 포함되지 않으므로
+    # 조용히 숨겨지지 않고 그대로 보인다.
+    excluded_ids = database.get_excluded_notice_ids()
     out = []
     for a in items:
+        if a.get("id") in excluded_ids:
+            continue
         b = dict(a)
         b["src"] = canonical_source_id(b.get("src") or b.get("source") or "unknown")
         b["status"], b["status_inferred"] = status_of(b)
