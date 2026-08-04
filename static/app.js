@@ -377,6 +377,7 @@ async function loadAll(){
   renderAuthUI();
   renderSources();
   renderList();
+  if(currentUserState && !currentUserState.onboarding_done) startOnboardingTour();
 }
 
 function renderAuthUI(){

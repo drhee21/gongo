@@ -217,6 +217,29 @@ def init_db() -> None:
         _ensure_column(con, "source_overrides", "name", "TEXT")
         _ensure_column(con, "source_overrides", "enabled_override", "INTEGER")
 
+        # 신규 가입자 온보딩 투어 기능을 추가하면서, 이 기능이 생기기 전부터 있던 기존
+        # 계정들도 로그인하면 갑자기 투어가 뜨게 되는 문제가 있었다(onboarding_done이
+        # 없으면 항상 false로 취급되므로). 이 마이그레이션은 딱 한 번만 실행되어 그
+        # 시점에 이미 존재하던 계정 전부를 "이미 온보딩 완료"로 표시한다 — 이후 새로
+        # 가입하는 계정만 실제로 투어를 보게 된다. get_app_setting/set_user_setting을
+        # 여기서 직접 못 쓰는 이유는 그 함수들이 init_db()를 다시 호출해서 재귀에
+        # 빠지기 때문이다(그래서 같은 커넥션으로 SQL을 직접 실행한다).
+        marker = con.execute("SELECT value_json FROM app_settings WHERE key='onboarding_backfill_done'").fetchone()
+        if not marker:
+            ts = now_iso()
+            for row in con.execute("SELECT id FROM users").fetchall():
+                con.execute(
+                    """
+                    INSERT INTO user_settings(user_id, key, value_json, updated_at) VALUES (?, 'onboarding_done', 'true', ?)
+                    ON CONFLICT(user_id, key) DO NOTHING
+                    """,
+                    (row["id"], ts),
+                )
+            con.execute(
+                "INSERT INTO app_settings(key, value_json, updated_at) VALUES ('onboarding_backfill_done', 'true', ?)",
+                (ts,),
+            )
+
 
 def upsert_notices(items: Iterable[Dict[str, Any]], prune: bool = True, extra_keep_ids: Optional[Iterable[str]] = None) -> int:
     """Insert/update notices and their per-site source list.

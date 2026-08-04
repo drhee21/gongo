@@ -199,6 +199,7 @@ def user_public(user: Dict[str, Any]) -> Dict[str, Any]:
         "is_admin": bool(user.get("is_admin")),
         "llm_preference": {"model_id": model_id},
         "has_llm_key": bool(resolve_llm_key_enc(user, llm.provider_of(model_id))),
+        "onboarding_done": bool(database.get_user_setting(user["id"], "onboarding_done", False)),
     }
 
 
@@ -448,6 +449,14 @@ class Handler(BaseHTTPRequestHandler):
                     "llm_preference": {"model_id": model_id},
                     "has_llm_key": bool(resolve_llm_key_enc(user, llm.provider_of(model_id))),
                 })
+                return
+            if path == "/api/me/onboarding-complete":
+                user = current_user(self)
+                if not user:
+                    self.send_json({"ok": False, "error": "로그인이 필요합니다"}, status=401)
+                    return
+                database.set_user_setting(user["id"], "onboarding_done", True)
+                self.send_json({"ok": True})
                 return
             if path == "/api/recollect":
                 user = current_user(self)
