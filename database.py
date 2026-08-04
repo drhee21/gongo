@@ -9,6 +9,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Set
 
+import llm
+
 ROOT = Path(__file__).resolve().parent
 DATA_DIR = ROOT / "data"
 DB_PATH = DATA_DIR / "gongo.sqlite"
@@ -187,6 +189,20 @@ def init_db() -> None:
                 FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
             );
 
+            -- 사용자당 공급자 하나에 키 하나만 두던 llm_provider_keys를 대체한다.
+            -- 이제 사용자는 (이름, 모델, 키) 묶음을 여러 개 저장해두고 그중 하나를
+            -- "활성"으로 골라 쓸 수 있다 (활성 프로필 id는 user_settings의
+            -- 'llm_active_profile_id' 키에 저장된다).
+            CREATE TABLE IF NOT EXISTS llm_key_profiles (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                label TEXT NOT NULL,
+                model_id TEXT NOT NULL,
+                key_enc TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+
             CREATE TABLE IF NOT EXISTS source_recipes (
                 source_id TEXT PRIMARY KEY,
                 recipe_json TEXT NOT NULL,
@@ -246,6 +262,71 @@ def init_db() -> None:
                 )
             con.execute(
                 "INSERT INTO app_settings(key, value_json, updated_at) VALUES ('onboarding_backfill_done', 'true', ?)",
+                (ts,),
+            )
+
+        # llm_provider_keys(사용자당 공급자 하나에 키 하나)를 llm_key_profiles(이름 붙인
+        # 키+모델 묶음 여러 개)로 한 번만 옮긴다. 기존에 등록해둔 키를 잃지 않도록,
+        # 공급자별 키 하나당 프로필 하나를 만들고 — 그 사용자가 마지막으로 골라둔
+        # 모델(llm_preference)이 그 공급자 소속이면 그 모델로, 아니면 그 공급자의
+        # 첫 카탈로그 모델로 채운다. 레거시 users.anthropic_api_key_enc 컬럼도 함께
+        # 옮긴다(신규 테이블로 아직 안 옮겨진 계정 대비).
+        marker = con.execute("SELECT value_json FROM app_settings WHERE key='llm_profiles_backfill_done'").fetchone()
+        if not marker:
+            ts = now_iso()
+            for user_row in con.execute("SELECT id, anthropic_api_key_enc FROM users").fetchall():
+                uid = user_row["id"]
+                provider_keys: Dict[str, str] = {}
+                for pk in con.execute(
+                    "SELECT provider, key_enc FROM llm_provider_keys WHERE user_id=?", (uid,)
+                ).fetchall():
+                    provider_keys[pk["provider"]] = pk["key_enc"]
+                if user_row["anthropic_api_key_enc"] and "anthropic" not in provider_keys:
+                    provider_keys["anthropic"] = user_row["anthropic_api_key_enc"]
+                if not provider_keys:
+                    continue
+
+                pref_row = con.execute(
+                    "SELECT value_json FROM user_settings WHERE user_id=? AND key='llm_preference'", (uid,)
+                ).fetchone()
+                pref_model_id = None
+                if pref_row:
+                    try:
+                        pref_model_id = (json.loads(pref_row["value_json"]) or {}).get("model_id")
+                    except Exception:
+                        pref_model_id = None
+
+                created_ids: List[str] = []
+                active_id = None
+                for provider, key_enc in provider_keys.items():
+                    if pref_model_id and llm.provider_of(pref_model_id) == provider:
+                        model_id = pref_model_id
+                    else:
+                        model_id = next(
+                            (m["id"] for m in llm.MODEL_CATALOG if m["provider"] == provider), None
+                        )
+                    if not model_id:
+                        continue
+                    profile_id = uuid.uuid4().hex
+                    con.execute(
+                        "INSERT INTO llm_key_profiles(id, user_id, label, model_id, key_enc, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                        (profile_id, uid, llm.PROVIDER_LABELS.get(provider, provider), model_id, key_enc, ts),
+                    )
+                    created_ids.append(profile_id)
+                    if model_id == pref_model_id:
+                        active_id = profile_id
+                if not active_id and created_ids:
+                    active_id = created_ids[0]
+                if active_id:
+                    con.execute(
+                        """
+                        INSERT INTO user_settings(user_id, key, value_json, updated_at) VALUES (?, 'llm_active_profile_id', ?, ?)
+                        ON CONFLICT(user_id, key) DO NOTHING
+                        """,
+                        (uid, json.dumps(active_id), ts),
+                    )
+            con.execute(
+                "INSERT INTO app_settings(key, value_json, updated_at) VALUES ('llm_profiles_backfill_done', 'true', ?)",
                 (ts,),
             )
 
@@ -927,95 +1008,96 @@ def get_any_bizinfo_key_enc() -> Optional[str]:
     return row["bizinfo_api_key_enc"] if row else None
 
 
-# ──────────────────────────── LLM 공급자 키 ────────────────────────────
+# ──────────────────────────── LLM 키 프로필 ────────────────────────────
+# 사용자는 (이름, 모델, 키) 묶음을 여러 개 저장해두고 그중 하나를 "활성"으로
+# 골라 쓴다. 활성 프로필 id는 user_settings의 'llm_active_profile_id' 키에 저장된다.
 
-def set_llm_provider_key(user_id: str, provider: str, encrypted_key: Optional[str]) -> None:
+def create_llm_key_profile(user_id: str, label: str, model_id: str, encrypted_key: str) -> str:
+    init_db()
+    profile_id = uuid.uuid4().hex
+    with connect() as con:
+        con.execute(
+            "INSERT INTO llm_key_profiles(id, user_id, label, model_id, key_enc, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (profile_id, user_id, label, model_id, encrypted_key, now_iso()),
+        )
+    return profile_id
+
+
+def list_llm_key_profiles(user_id: str) -> List[Dict[str, Any]]:
     init_db()
     with connect() as con:
-        if encrypted_key is None:
-            con.execute(
-                "DELETE FROM llm_provider_keys WHERE user_id=? AND provider=?", (user_id, provider)
-            )
-        else:
-            con.execute(
-                """
-                INSERT INTO llm_provider_keys(user_id, provider, key_enc, updated_at) VALUES (?, ?, ?, ?)
-                ON CONFLICT(user_id, provider) DO UPDATE SET key_enc=excluded.key_enc, updated_at=excluded.updated_at
-                """,
-                (user_id, provider, encrypted_key, now_iso()),
-            )
+        rows = con.execute(
+            "SELECT id, label, model_id, created_at FROM llm_key_profiles WHERE user_id=? ORDER BY created_at ASC",
+            (user_id,),
+        ).fetchall()
+    return [dict(r) for r in rows]
 
 
-def get_llm_provider_key(user_id: str, provider: str) -> Optional[str]:
-    init_db()
-    with connect() as con:
-        row = con.execute(
-            "SELECT key_enc FROM llm_provider_keys WHERE user_id=? AND provider=?", (user_id, provider)
-        ).fetchone()
-    return row["key_enc"] if row else None
-
-
-def get_any_llm_provider_key_enc(provider: str) -> Optional[str]:
-    """수집기 등 로그인 사용자가 없는 백그라운드 작업이 쓸 LLM 키를 찾는다.
-
-    get_any_bizinfo_key_enc()와 동일한 패턴: 관리자가 등록한 키를 우선하고,
-    없으면 아무 사용자나 등록한 키를 사용한다.
-    """
+def get_llm_key_profile(user_id: str, profile_id: str) -> Optional[Dict[str, Any]]:
+    """key_enc를 포함한 전체 행을 반환한다 (소유자 본인 확인 겸용 — user_id가
+    일치하지 않으면 다른 사용자의 프로필을 조회할 수 없다)."""
     init_db()
     with connect() as con:
         row = con.execute(
-            """
-            SELECT k.key_enc FROM llm_provider_keys k JOIN users u ON u.id = k.user_id
-            WHERE k.provider=? ORDER BY u.is_admin DESC, u.created_at ASC LIMIT 1
-            """,
-            (provider,),
+            "SELECT id, label, model_id, key_enc, created_at FROM llm_key_profiles WHERE id=? AND user_id=?",
+            (profile_id, user_id),
         ).fetchone()
-    return row["key_enc"] if row else None
+    return dict(row) if row else None
+
+
+def delete_llm_key_profile(user_id: str, profile_id: str) -> None:
+    init_db()
+    with connect() as con:
+        con.execute("DELETE FROM llm_key_profiles WHERE id=? AND user_id=?", (profile_id, user_id))
+        active_row = con.execute(
+            "SELECT value_json FROM user_settings WHERE user_id=? AND key='llm_active_profile_id'", (user_id,)
+        ).fetchone()
+        if active_row and json.loads(active_row["value_json"]) == profile_id:
+            con.execute(
+                "DELETE FROM user_settings WHERE user_id=? AND key='llm_active_profile_id'", (user_id,)
+            )
+
+
+def set_active_llm_profile(user_id: str, profile_id: str) -> bool:
+    """profile_id가 실제로 이 사용자 소유일 때만 활성으로 지정한다."""
+    if not get_llm_key_profile(user_id, profile_id):
+        return False
+    set_user_setting(user_id, "llm_active_profile_id", profile_id)
+    return True
+
+
+def get_active_llm_profile(user_id: str) -> Optional[Dict[str, Any]]:
+    """활성으로 지정해둔 프로필을 반환한다. 지정해둔 게 없거나(또는 지워졌으면)
+    가장 먼저 등록한 프로필로 대신 떨어진다. 프로필이 하나도 없으면 None."""
+    active_id = get_user_setting(user_id, "llm_active_profile_id", None)
+    if active_id:
+        profile = get_llm_key_profile(user_id, active_id)
+        if profile:
+            return profile
+    profiles = list_llm_key_profiles(user_id)
+    if not profiles:
+        return None
+    return get_llm_key_profile(user_id, profiles[0]["id"])
+
+
+def get_any_llm_profile() -> Optional[Dict[str, Any]]:
+    """로그인 사용자가 없는 백그라운드 작업(수집기 등)이 쓸 모델+키를 찾는다.
+    관리자의 활성 프로필을 우선하고, 없으면 아무 사용자의 활성 프로필이나 쓴다.
+    아무도 키를 등록하지 않았으면 None (호출부에서 llm.DEFAULT_MODEL_ID로 떨어지고
+    키 없이 실패하면 된다)."""
+    init_db()
+    with connect() as con:
+        user_ids = [r["id"] for r in con.execute(
+            "SELECT id FROM users ORDER BY is_admin DESC, created_at ASC"
+        ).fetchall()]
+    for uid in user_ids:
+        profile = get_active_llm_profile(uid)
+        if profile:
+            return profile
+    return None
 
 
 # ──────────────────────────── 수집 레시피 ────────────────────────────
-
-def get_any_llm_key_enc(provider: str) -> Optional[str]:
-    """수집기가 쓸 LLM 키를 찾는다. get_any_bizinfo_key_enc()와 동일한 패턴이되,
-    anthropic은 새 llm_provider_keys 테이블에 없으면 레거시 users.anthropic_api_key_enc
-    컬럼도 확인한다 (신규 테이블로 옮기기 전 등록된 사용자도 계속 동작하도록).
-    """
-    key = get_any_llm_provider_key_enc(provider)
-    if key:
-        return key
-    if provider != "anthropic":
-        return None
-    init_db()
-    with connect() as con:
-        row = con.execute(
-            "SELECT anthropic_api_key_enc FROM users WHERE anthropic_api_key_enc IS NOT NULL "
-            "ORDER BY is_admin DESC, created_at ASC LIMIT 1"
-        ).fetchone()
-    return row["anthropic_api_key_enc"] if row else None
-
-
-def get_any_llm_preference() -> Optional[Dict[str, Any]]:
-    """로그인 사용자가 없는 백그라운드 작업(수집기 등)이 쓸 모델 설정을 찾는다.
-
-    관리자가 골라둔 모델을 우선하고, 없으면 아무 사용자나 설정해둔 모델을 쓴다.
-    아무도 설정하지 않았으면 None을 반환하며, 호출부에서 llm.DEFAULT_MODEL_ID로
-    떨어지면 된다.
-    """
-    init_db()
-    with connect() as con:
-        row = con.execute(
-            """
-            SELECT s.value_json FROM user_settings s JOIN users u ON u.id = s.user_id
-            WHERE s.key='llm_preference' ORDER BY u.is_admin DESC, u.created_at ASC LIMIT 1
-            """
-        ).fetchone()
-    if not row:
-        return None
-    try:
-        return json.loads(row["value_json"])
-    except Exception:
-        return None
-
 
 def get_source_recipe(source_id: str) -> Optional[Dict[str, Any]]:
     init_db()

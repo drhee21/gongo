@@ -154,24 +154,33 @@
           <div id="companyDocsList" class="doc-list"></div>
         </div>
         <div class="panel">
-          <h2 data-i18n="llmModelTitle">AI 맞춤 분석 모델</h2>
-          <p data-i18n="llmModelDesc">AI 맞춤 분석에 사용할 모델과 API 키를 설정합니다. 키는 암호화되어 저장되고 화면에는 다시 표시되지 않습니다.</p>
-          <form id="llmPreferenceForm" class="form-grid">
+          <h2 data-i18n="llmModelTitle">AI 모델 및 API 키</h2>
+          <p data-i18n="llmModelDesc">AI 맞춤 분석, 신규 수집 사이트 분석 등에 쓸 키를 여러 개 등록해두고 그중 하나를 활성으로 골라 쓸 수 있습니다. 키는 암호화되어 저장되고 화면에는 다시 표시되지 않습니다.</p>
+          <label class="wide"><span data-i18n="llmActiveProfileLabel">사용할 키</span>
+            <select id="llmProfileSelect"></select>
+          </label>
+          <p class="meta" id="llmPreferenceStatus"></p>
+          <div class="wide form-actions">
+            <button class="button" type="button" id="btnDeleteLlmProfile" data-i18n="btnDeleteKey">이 키 삭제</button>
+          </div>
+          <h3 data-i18n="llmAddProfileTitle">새 키 추가</h3>
+          <form id="llmProfileForm" class="form-grid">
+            <label class="wide"><span data-i18n="llmProfileLabelLabel">이름 (선택)</span>
+              <input type="text" name="label" id="llmProfileLabelInput" data-i18n-placeholder="llmProfileLabelPlaceholder" placeholder="예: 개인 Anthropic 키" />
+            </label>
             <label class="wide"><span data-i18n="modelLabel">모델</span>
               <select name="model_id" id="llmModelSelect"></select>
             </label>
             <label class="wide" id="llmKeyLabel"><span data-i18n="llmKeyLabel">LLM API 키</span>
               <div class="input-eye-wrap">
-                <input type="password" name="key" id="llmKeyInput" data-i18n-placeholder="llmKeyPlaceholder" placeholder="비워두면 변경 없음" />
+                <input type="password" name="key" id="llmKeyInput" required />
                 <button type="button" class="eye-toggle" data-eye-toggle="llmKeyInput" aria-label="API 키 표시/숨기기"></button>
               </div>
             </label>
             <div class="wide form-actions">
-              <button class="primary" type="submit" data-i18n="btnSave">저장</button>
-              <button class="button" type="button" id="btnDeleteLlmKey" data-i18n="btnDeleteKey">키 삭제</button>
+              <button class="primary" type="submit" data-i18n="btnAddLlmProfile">키 추가</button>
             </div>
           </form>
-          <p class="meta" id="llmPreferenceStatus"></p>
         </div>
         <div class="panel">
           <h2 data-i18n="bizinfoKeyTitle">기업마당 API 키</h2>

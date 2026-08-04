@@ -188,24 +188,27 @@ def clear_session_cookie_header() -> str:
     return f"{SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0"
 
 
-def resolve_llm_key_enc(user: Dict[str, Any], provider: str) -> Optional[str]:
-    key_enc = database.get_llm_provider_key(user["id"], provider)
-    if key_enc:
-        return key_enc
-    if provider == "anthropic":
-        return user.get("anthropic_api_key_enc")  # 신규 테이블 이전의 레거시 키
-    return None
+def resolve_active_llm(user: Dict[str, Any]) -> Tuple[Optional[str], Optional[str]]:
+    """사용자의 활성 LLM 키 프로필에서 (model_id, 복호화된 api_key)를 반환한다.
+    등록된 프로필이 없으면 (None, None)."""
+    profile = database.get_active_llm_profile(user["id"])
+    if not profile:
+        return None, None
+    return profile["model_id"], auth.decrypt_secret(profile["key_enc"])
 
 
 def user_public(user: Dict[str, Any]) -> Dict[str, Any]:
-    pref = database.get_user_setting(user["id"], "llm_preference", {}) or {}
-    model_id = pref.get("model_id") or llm.DEFAULT_MODEL_ID
+    profiles = database.list_llm_key_profiles(user["id"])
+    active = database.get_active_llm_profile(user["id"])
     return {
         "email": user["email"],
         "has_bizinfo_key": bool(user.get("bizinfo_api_key_enc")),
         "is_admin": bool(user.get("is_admin")),
-        "llm_preference": {"model_id": model_id},
-        "has_llm_key": bool(resolve_llm_key_enc(user, llm.provider_of(model_id))),
+        "llm_profiles": [
+            {"id": p["id"], "label": p["label"], "model_id": p["model_id"]} for p in profiles
+        ],
+        "active_llm_profile_id": active["id"] if active else None,
+        "has_llm_key": bool(active),
         "onboarding_done": bool(database.get_user_setting(user["id"], "onboarding_done", False)),
     }
 
@@ -421,41 +424,47 @@ class Handler(BaseHTTPRequestHandler):
                 database.set_user_bizinfo_key(user["id"], auth.encrypt_secret(raw_key))
                 self.send_json({"ok": True, "has_bizinfo_key": True})
                 return
-            if path == "/api/me/llm-key":
+            if path == "/api/me/llm-profiles":
                 user = current_user(self)
                 if not user:
                     self.send_json({"ok": False, "error": "로그인이 필요합니다"}, status=401)
                     return
                 data = self.read_json()
                 model_id = str(data.get("model_id") or "").strip()
-                if model_id not in llm.MODEL_BY_ID:
+                model = llm.MODEL_BY_ID.get(model_id)
+                if not model:
                     self.send_json({"ok": False, "error": "지원하지 않는 모델입니다"}, status=400)
                     return
-                provider = llm.provider_of(model_id)
                 raw_key = str(data.get("key") or "").strip()
                 if not raw_key:
-                    database.set_llm_provider_key(user["id"], provider, None)
-                    self.send_json({"ok": True, "has_llm_key": False})
+                    self.send_json({"ok": False, "error": "API 키를 입력해주세요"}, status=400)
                     return
-                database.set_llm_provider_key(user["id"], provider, auth.encrypt_secret(raw_key))
-                self.send_json({"ok": True, "has_llm_key": True})
+                label = str(data.get("label") or "").strip() or model["label"]
+                profile_id = database.create_llm_key_profile(user["id"], label, model_id, auth.encrypt_secret(raw_key))
+                database.set_active_llm_profile(user["id"], profile_id)
+                self.send_json({"ok": True, "user": user_public(user)})
                 return
-            if path == "/api/me/llm-preference":
+            if path == "/api/me/llm-profiles/activate":
                 user = current_user(self)
                 if not user:
                     self.send_json({"ok": False, "error": "로그인이 필요합니다"}, status=401)
                     return
                 data = self.read_json()
-                model_id = str(data.get("model_id") or "").strip()
-                if model_id not in llm.MODEL_BY_ID:
-                    self.send_json({"ok": False, "error": "지원하지 않는 모델입니다"}, status=400)
+                profile_id = str(data.get("profile_id") or "").strip()
+                if not database.set_active_llm_profile(user["id"], profile_id):
+                    self.send_json({"ok": False, "error": "존재하지 않는 키입니다"}, status=400)
                     return
-                database.set_user_setting(user["id"], "llm_preference", {"model_id": model_id})
-                self.send_json({
-                    "ok": True,
-                    "llm_preference": {"model_id": model_id},
-                    "has_llm_key": bool(resolve_llm_key_enc(user, llm.provider_of(model_id))),
-                })
+                self.send_json({"ok": True, "user": user_public(user)})
+                return
+            if path == "/api/me/llm-profiles/delete":
+                user = current_user(self)
+                if not user:
+                    self.send_json({"ok": False, "error": "로그인이 필요합니다"}, status=401)
+                    return
+                data = self.read_json()
+                profile_id = str(data.get("profile_id") or "").strip()
+                database.delete_llm_key_profile(user["id"], profile_id)
+                self.send_json({"ok": True, "user": user_public(user)})
                 return
             if path == "/api/me/onboarding-complete":
                 user = current_user(self)
@@ -590,14 +599,12 @@ class Handler(BaseHTTPRequestHandler):
                     self.send_json({"ok": False, "error": "이미 기존 소스가 사용 중인 URL입니다.", "code": "invalid_url"}, status=400)
                     return
 
-                model_id = (database.get_user_setting(user["id"], "llm_preference", {}) or {}).get("model_id") or llm.DEFAULT_MODEL_ID
-                enc_key = resolve_llm_key_enc(user, llm.provider_of(model_id))
-                if not enc_key:
+                model_id, api_key = resolve_active_llm(user)
+                if not api_key:
                     self.send_json(
                         {"ok": False, "error": "먼저 '회사 정보'에서 본인의 API 키를 등록해주세요.", "code": "no_llm_key"}, status=400
                     )
                     return
-                api_key = auth.decrypt_secret(enc_key)
                 common = cfg.get("common", {})
 
                 if common.get("respect_robots", True) and not collector.robots_allows(url):
@@ -841,15 +848,12 @@ class Handler(BaseHTTPRequestHandler):
                 if not user:
                     self.send_json({"ok": False, "error": "로그인이 필요합니다"}, status=401)
                     return
-                pref = database.get_user_setting(user["id"], "llm_preference", {}) or {}
-                model_id = pref.get("model_id") or llm.DEFAULT_MODEL_ID
-                enc_key = resolve_llm_key_enc(user, llm.provider_of(model_id))
-                if not enc_key:
+                model_id, api_key = resolve_active_llm(user)
+                if not api_key:
                     self.send_json(
                         {"ok": False, "error": "먼저 '회사 정보'에서 본인의 API 키를 등록해주세요."}, status=400
                     )
                     return
-                api_key = auth.decrypt_secret(enc_key)
                 company = database.get_user_setting(user["id"], "company", {})
                 documents = database.list_company_documents(user["id"])
                 notices = database.list_notices()

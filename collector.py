@@ -896,11 +896,11 @@ def enrich_khidi_deadlines_with_ai(items: List[Dict[str, Any]], contents: Dict[s
     if not candidates:
         return
 
-    model_id = (database.get_any_llm_preference() or {}).get("model_id") or llm.DEFAULT_MODEL_ID
-    key_enc = database.get_any_llm_key_enc(llm.provider_of(model_id))
-    if not key_enc:
+    profile = database.get_any_llm_profile()
+    if not profile:
         return  # AI 키가 없으면 기존 '날짜 미상' 처리를 그대로 둔다 — 조용히 건너뛴다.
-    api_key = auth.decrypt_secret(key_enc)
+    model_id = profile["model_id"]
+    api_key = auth.decrypt_secret(profile["key_enc"])
 
     by_id = {it["id"]: it for it in candidates}
     for i in range(0, len(candidates), KHIDI_DEADLINE_CHUNK_SIZE):
@@ -1485,11 +1485,11 @@ def recover_source_via_recipe(source_id: str, list_url: str, common: Dict[str, A
             pass  # 저장된 레시피가 더 이상 안 맞을 수 있다 — 아래에서 새로 발견을 시도한다.
 
     # 재발견은 LLM을 여러 번 호출하므로 여기서부터만 model_id/api_key가 필요하다.
-    model_id = (database.get_any_llm_preference() or {}).get("model_id") or llm.DEFAULT_MODEL_ID
-    key_enc = database.get_any_llm_key_enc(llm.provider_of(model_id))
-    api_key = auth.decrypt_secret(key_enc) if key_enc else None
-    if not api_key:
+    profile = database.get_any_llm_profile()
+    if not profile:
         return None
+    model_id = profile["model_id"]
+    api_key = auth.decrypt_secret(profile["key_enc"])
     try:
         r = SESSION.get(list_url, timeout=common.get("timeout_sec", 20))
         r.raise_for_status()

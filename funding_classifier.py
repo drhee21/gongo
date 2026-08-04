@@ -128,13 +128,11 @@ def classify_new_kstartup_notices(items: List[Dict[str, Any]], common: Dict[str,
     if not new_ids:
         return
 
-    model_id = (database.get_any_llm_preference() or {}).get("model_id") or llm.DEFAULT_MODEL_ID
-    key_enc = database.get_any_llm_key_enc(llm.provider_of(model_id))
-    if not key_enc:
+    profile = database.get_any_llm_profile()
+    if not profile:
         return
-    api_key = auth.decrypt_secret(key_enc)
-    if not api_key:
-        return
+    model_id = profile["model_id"]
+    api_key = auth.decrypt_secret(profile["key_enc"])
 
     timeout = int(common.get("timeout_sec", 20))
     delay = float(common.get("request_delay_sec", 0.8))
