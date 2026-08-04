@@ -115,7 +115,9 @@ def _chunks(items: List[Any], size: int) -> List[List[Any]]:
     return [items[i:i + size] for i in range(0, len(items), size)]
 
 
-def classify_new_kstartup_notices(items: List[Dict[str, Any]], common: Dict[str, Any]) -> None:
+def classify_new_kstartup_notices(
+    items: List[Dict[str, Any]], common: Dict[str, Any], triggering_user_id: str | None = None
+) -> None:
     """`items`(방금 수집한 kstartup 공고 전체) 중 아직 판정되지 않은 것만 골라
     상세 페이지를 가져오고 LLM으로 keep/exclude를 판정해 DB에 저장한다.
 
@@ -128,7 +130,7 @@ def classify_new_kstartup_notices(items: List[Dict[str, Any]], common: Dict[str,
     if not new_ids:
         return
 
-    profile = database.get_any_llm_profile()
+    profile = database.resolve_background_llm_profile(triggering_user_id)
     if not profile:
         return
     model_id = profile["model_id"]

@@ -20,7 +20,7 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Set, Tuple
 from urllib.parse import urljoin, urlparse
 
 import requests
@@ -879,7 +879,9 @@ def _valid_ymd_str(s: Optional[str]) -> bool:
     return bool(m and valid_ymd(*map(int, m.groups())))
 
 
-def enrich_khidi_deadlines_with_ai(items: List[Dict[str, Any]], contents: Dict[str, str]) -> None:
+def enrich_khidi_deadlines_with_ai(
+    items: List[Dict[str, Any]], contents: Dict[str, str], triggering_user_id: Optional[str] = None
+) -> None:
     """제목에서 시작일/마감일 중 못 찾은 게 있는 KHIDI 공고만, 본문 텍스트로 AI에게 물어본다.
 
     비용을 줄이기 위해 제목으로 시작일·마감일을 이미 둘 다 찾은 공고는 애초에 대상에서
@@ -896,7 +898,7 @@ def enrich_khidi_deadlines_with_ai(items: List[Dict[str, Any]], contents: Dict[s
     if not candidates:
         return
 
-    profile = database.get_any_llm_profile()
+    profile = database.resolve_background_llm_profile(triggering_user_id)
     if not profile:
         return  # AI 키가 없으면 기존 '날짜 미상' 처리를 그대로 둔다 — 조용히 건너뛴다.
     model_id = profile["model_id"]
@@ -931,7 +933,9 @@ def enrich_khidi_deadlines_with_ai(items: List[Dict[str, Any]], contents: Dict[s
                 it["dates_unknown"] = False
 
 
-def collect_khidi_direct(bcfg: Dict[str, Any], common: Dict[str, Any]) -> List[Dict[str, Any]]:
+def collect_khidi_direct(
+    bcfg: Dict[str, Any], common: Dict[str, Any], triggering_user_id: Optional[str] = None
+) -> List[Dict[str, Any]]:
     if not bcfg.get("enabled", False):
         raise RuntimeError("비활성화됨")
     if common.get("respect_robots", True) and not robots_allows(KHIDI_FEED_URL):
@@ -992,7 +996,7 @@ def collect_khidi_direct(bcfg: Dict[str, Any], common: Dict[str, Any]) -> List[D
 
     if not out:
         raise RuntimeError("0건 파싱: khidi 공고 API 구조 확인 필요")
-    enrich_khidi_deadlines_with_ai(out, contents)
+    enrich_khidi_deadlines_with_ai(out, contents, triggering_user_id)
     time.sleep(float(common.get("request_delay_sec", 0.8)))
     return out
 
@@ -1462,7 +1466,9 @@ def merge_duplicate_notices(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]
     return merged
 
 
-def recover_source_via_recipe(source_id: str, list_url: str, common: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
+def recover_source_via_recipe(
+    source_id: str, list_url: str, common: Dict[str, Any], triggering_user_id: Optional[str] = None
+) -> Optional[List[Dict[str, Any]]]:
     """flag_source_anomalies()가 이 소스를 '갑자기 0건/급감'으로 표시했을 때 예비로 시도한다.
 
     먼저 저장된 레시피가 있으면 그대로 재실행해보고(레시피가 여전히 맞으면 LLM
@@ -1485,7 +1491,7 @@ def recover_source_via_recipe(source_id: str, list_url: str, common: Dict[str, A
             pass  # 저장된 레시피가 더 이상 안 맞을 수 있다 — 아래에서 새로 발견을 시도한다.
 
     # 재발견은 LLM을 여러 번 호출하므로 여기서부터만 model_id/api_key가 필요하다.
-    profile = database.get_any_llm_profile()
+    profile = database.resolve_background_llm_profile(triggering_user_id)
     if not profile:
         return None
     model_id = profile["model_id"]
@@ -1532,10 +1538,35 @@ def _collect_via_stored_recipe(source_id: str, common: Dict[str, Any], cap: int)
 
 # collect_all()에서 소스 하나가 실패했을 때, 재시도로도 못 살아나면 이번 실행의
 # 결과에서 빠진 채로 남는다 — 그런 상태(state)의 소스는 DB에 남아있던 기존 데이터를
-# upsert_notices()의 prune 단계에서 지우지 않고 보존한다. 반대로 "비활성화"(관리자가
-# 일부러 끔)나 "레시피 없음"(아직 한 번도 발견된 적 없는 신규 커스텀 소스)은 실패가
-# 아니라 의도된/자연스러운 상태이므로 기존 동작(정리 대상)을 그대로 둔다.
-PRESERVE_ON_FAILURE_STATES = {"오류", "차단(robots)"}
+# upsert_notices()의 prune 단계에서 지우지 않고 보존한다. "비활성화"(관리자가 일부러
+# 끔)도 마찬가지로 보존 대상이다 — 소스를 끄는 건 "더는 새로 안 가져온다"는 뜻이지
+# "이미 모아둔 공고를 지운다"는 뜻이 아니다(화면 노출 여부는 별개로
+# get_disabled_source_ids()를 통해 조회 단계에서 걸러진다). "레시피 없음"(아직 한
+# 번도 발견된 적 없는 신규 커스텀 소스)만 실패도 의도된 비활성화도 아닌 그냥 "아직
+# 없음" 상태라 기존 동작(정리 대상)을 그대로 둔다.
+PRESERVE_ON_FAILURE_STATES = {"오류", "차단(robots)", "비활성화"}
+
+
+def get_disabled_source_ids() -> Set[str]:
+    """관리자 화면에서 재정의 가능한 소스 중 현재 비활성화된 것들의 id를 반환한다.
+    소스별 페이지(collect_all)뿐 아니라 조회 화면에서도 써서, 비활성화된 소스의
+    기존 공고는 DB에는 남아있되(prune 대상 아님) 목록에는 노출되지 않게 한다."""
+    cfg = load_config()
+    overrides = database.get_source_overrides()
+    boards = cfg.get("boards") or {}
+    checks = [
+        ("kstartup", cfg.get("kstartup", {})),
+        ("bizinfo", cfg.get("bizinfo", {})),
+        ("g2b", cfg.get("g2b", {})),
+        ("nrf", boards.get("nrf", {})),
+        ("kddf", boards.get("kddf", {})),
+        ("biohub_direct", boards.get("biohub_direct", {})),
+        ("khidi_direct", boards.get("khidi_direct", {})),
+    ]
+    return {
+        sid for sid, raw_cfg in checks
+        if not _apply_source_override(raw_cfg, sid, overrides).get("enabled", False)
+    }
 
 
 def _run_with_retry(fn: Callable[[], Any], attempts: int = 2, delay_sec: float = 2.0) -> Any:
@@ -1573,7 +1604,7 @@ def _apply_source_override(sub_cfg: Dict[str, Any], source_id: str, overrides: D
     return sub_cfg
 
 
-def collect_all(write_db: bool = True) -> CollectRun:
+def collect_all(write_db: bool = True, triggering_user_id: Optional[str] = None) -> CollectRun:
     cfg = load_config()
     overrides = database.get_source_overrides()
     run = CollectRun()
@@ -1582,7 +1613,7 @@ def collect_all(write_db: bool = True) -> CollectRun:
     board_list_urls: Dict[str, str] = {}
 
     # Bizinfo and routed institutional notices.
-    bcfg = cfg.get("bizinfo", {})
+    bcfg = _apply_source_override(cfg.get("bizinfo", {}), "bizinfo", overrides)
     if bcfg.get("enabled", False):
         try:
             routed = _run_with_retry(lambda: collect_bizinfo({**common, **bcfg}, cfg.get("route_from_bizinfo", {})))
@@ -1598,7 +1629,7 @@ def collect_all(write_db: bool = True) -> CollectRun:
         run.record("bizinfo", [], "비활성화")
 
     # 나라장터(G2B) 입찰공고 — 물품/용역 중 키워드에 매칭되는 것만.
-    gcfg = cfg.get("g2b", {})
+    gcfg = _apply_source_override(cfg.get("g2b", {}), "g2b", overrides)
     if gcfg.get("enabled", False):
         try:
             run.record("g2b", _run_with_retry(lambda: collect_g2b({**common, **gcfg}))[:cap], "정상")
@@ -1619,7 +1650,7 @@ def collect_all(write_db: bool = True) -> CollectRun:
             items = _run_with_retry(lambda: _collect_via_stored_recipe("kstartup", common, cap))
             run.record("kstartup", items, "정상", name=kcfg.get("name"), method="레시피")
             try:
-                funding_classifier.classify_new_kstartup_notices(items, common)
+                funding_classifier.classify_new_kstartup_notices(items, common, triggering_user_id)
             except Exception:
                 # 판정 실패가 수집 자체를 실패로 만들면 안 된다 — 판정 전 공고는
                 # 기본적으로 화면에 계속 보이므로 조용히 다음 실행에서 재시도된다.
@@ -1650,7 +1681,7 @@ def collect_all(write_db: bool = True) -> CollectRun:
                 items = _run_with_retry(lambda: _collect_via_stored_recipe(sid, common, cap))
                 run.record(sid, items, "정상", name=board_cfg.get("name") or "국가신약개발사업단", method="레시피")
             elif sid == "khidi_direct":
-                items = _run_with_retry(lambda: collect_khidi_direct(board_cfg, common))[:cap]
+                items = _run_with_retry(lambda: collect_khidi_direct(board_cfg, common, triggering_user_id))[:cap]
                 run.record(sid, items, "정상", name=board_cfg.get("name") or "보건산업진흥원/KHIDI", method="전용 파서(API)")
             else:
                 items = _run_with_retry(lambda: collect_board(sid, board_cfg, common))[:cap]
@@ -1696,7 +1727,7 @@ def collect_all(write_db: bool = True) -> CollectRun:
         for sid, entry in run.sources.items():
             if not entry.get("anomaly") or sid not in board_list_urls:
                 continue
-            recovered = recover_source_via_recipe(sid, board_list_urls[sid], common)
+            recovered = recover_source_via_recipe(sid, board_list_urls[sid], common, triggering_user_id)
             if not recovered:
                 continue
             recovered = recovered[:cap]

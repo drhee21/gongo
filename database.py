@@ -421,12 +421,17 @@ def upsert_notices(items: Iterable[Dict[str, Any]], prune: bool = True, extra_ke
 
 def get_notice_ids_for_source(source_id: str) -> List[str]:
     """이 소스가 이전에 수집한 공고 id 전부를 돌려준다. collect_all()이 이번 실행에서
-    이 소스가 (재시도 포함) 실패했을 때, upsert_notices()의 prune 단계에서 지우지
-    않도록 보존할 id 목록을 만드는 데 쓴다."""
+    이 소스가 (재시도 포함) 실패했거나 비활성화됐을 때, upsert_notices()의 prune
+    단계에서 지우지 않도록 보존할 id 목록을 만드는 데 쓴다.
+
+    notice_sources가 아니라 notices.source를 직접 조회한다 — notice_sources는
+    교차 소스 병합(같은 공고가 여러 피드에 동시에 뜨는 경우) 기록용 보조 테이블이라
+    일부 소스는 값이 비어있거나 실제 상태와 어긋날 수 있다(예: 레시피로 수집되는
+    biohub_direct/khidi_direct). notices.source는 항상 정확하다."""
     init_db()
     with connect() as con:
-        rows = con.execute("SELECT notice_id FROM notice_sources WHERE source=?", (source_id,)).fetchall()
-    return [r["notice_id"] for r in rows]
+        rows = con.execute("SELECT id FROM notices WHERE source=?", (source_id,)).fetchall()
+    return [r["id"] for r in rows]
 
 
 def replace_source_status(statuses: Dict[str, Dict[str, Any]]) -> None:
@@ -510,6 +515,12 @@ def flag_source_anomalies(statuses: Dict[str, Dict[str, Any]]) -> Dict[str, Dict
             current = int(s.get("n") or s.get("count") or 0)
             entry["anomaly"] = False
             entry["anomaly_note"] = None
+            # 관리자가 의도적으로 꺼둔 소스는 0건이 정상이다 — 과거 평균과 비교해
+            # "이상 급감"으로 잘못 표시하면 안 되고, 그로 인해 collect_all()의
+            # 레시피 자동 복구가 걸려 꺼둔 소스를 도로 긁어오는 일도 없어야 한다.
+            if s.get("state") == "비활성화":
+                out[sid] = entry
+                continue
             if len(positive) >= 3 and avg >= ANOMALY_ZERO_MIN_AVG and current == 0:
                 entry["anomaly"] = True
                 entry["anomaly_note"] = f"최근 평균 {avg:.0f}건 대비 0건 — 사이트 구조 변경으로 수집이 깨졌을 수 있습니다."
@@ -1081,20 +1092,41 @@ def get_active_llm_profile(user_id: str) -> Optional[Dict[str, Any]]:
 
 
 def get_any_llm_profile() -> Optional[Dict[str, Any]]:
-    """로그인 사용자가 없는 백그라운드 작업(수집기 등)이 쓸 모델+키를 찾는다.
-    관리자의 활성 프로필을 우선하고, 없으면 아무 사용자의 활성 프로필이나 쓴다.
-    아무도 키를 등록하지 않았으면 None (호출부에서 llm.DEFAULT_MODEL_ID로 떨어지고
-    키 없이 실패하면 된다)."""
+    """아무도 콕 집어 요청하지 않은 백그라운드 작업(스케줄러 등, 요청을 보낸 특정
+    사용자가 없는 경우)이 쓸 모델+키를 찾는다. 관리자 중에서는 가장 최근에
+    관리자가 된 계정을 우선한다(오래된/테스트용 관리자 계정이 실제로 쓰고 있는
+    계정보다 우선되는 걸 막기 위해서다) — 관리자가 아예 없으면 아무 사용자의
+    활성 프로필이나 쓴다. 아무도 키를 등록하지 않았으면 None (호출부에서
+    llm.DEFAULT_MODEL_ID로 떨어지고 키 없이 실패하면 된다).
+
+    이 함수는 트리거한 사용자를 알 수 없을 때만 쓴다 — 로그인한 사용자가 직접
+    요청을 트리거한 경우엔 resolve_background_llm_profile()이 그 사용자 본인의
+    키를 우선한다."""
     init_db()
     with connect() as con:
         user_ids = [r["id"] for r in con.execute(
-            "SELECT id FROM users ORDER BY is_admin DESC, created_at ASC"
+            "SELECT id FROM users ORDER BY is_admin DESC, created_at DESC"
         ).fetchall()]
     for uid in user_ids:
         profile = get_active_llm_profile(uid)
         if profile:
             return profile
     return None
+
+
+def resolve_background_llm_profile(triggering_user_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """수집/판정처럼 로그인 세션 없이 실행되는 작업이 쓸 모델+키를 찾는다.
+
+    누가 이 작업을 트리거했는지 알면(예: 사용자가 직접 "업데이트" 버튼을 눌렀을
+    때) 그 사용자 본인의 활성 키를 최우선으로 쓴다 — 자기가 등록한 키가 있는데
+    엉뚱한 관리자 계정의 키가 대신 쓰이면 안 된다. 트리거한 사용자가 없거나(예:
+    스케줄러에 의한 자동 실행) 그 사용자에게 등록된 키가 없으면
+    get_any_llm_profile()로 대체한다."""
+    if triggering_user_id:
+        profile = get_active_llm_profile(triggering_user_id)
+        if profile:
+            return profile
+    return get_any_llm_profile()
 
 
 # ──────────────────────────── 수집 레시피 ────────────────────────────

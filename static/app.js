@@ -496,14 +496,17 @@ async function loadAllSources(){
       const displayName = (!s.name || s.name === s.default_name) && SOURCE_NAME_KEYS[canonicalSource(s.source_id)]
         ? t(SOURCE_NAME_KEYS[canonicalSource(s.source_id)])
         : s.name;
+      // bizinfo/g2b는 목록 URL이 아니라 API 키로 수집하므로 URL 재정의가 의미
+      // 없다 — default_url이 없는 소스는 URL 줄과 "수정" 버튼을 아예 생략한다.
+      const hasUrl = !!s.default_url;
       return `
       <div class="custom-source-row" data-source="${esc(s.source_id)}" data-kind="override">
         <div class="custom-source-info">
           <div><strong>${esc(displayName)}</strong> <span class="badge-warn" style="background:rgba(0,0,0,.06);color:var(--muted)">${esc(t('badgeExistingSource'))}</span>${s.enabled ? '' : `<span class="badge-warn">${esc(t('disabledBadge'))}</span>`}</div>
-          <div class="custom-source-url">${esc(s.override_url || s.default_url || t('noneValue'))}${s.override_url ? ` <span class="meta">${esc(t('overrideNotice'))}</span>` : ''}</div>
+          ${hasUrl ? `<div class="custom-source-url">${esc(s.override_url || s.default_url || t('noneValue'))}${s.override_url ? ` <span class="meta">${esc(t('overrideNotice'))}</span>` : ''}</div>` : ''}
         </div>
         <div class="custom-source-actions">
-          <button type="button" class="button override-source-edit">${esc(t('btnEdit'))}</button>
+          ${hasUrl ? `<button type="button" class="button override-source-edit">${esc(t('btnEdit'))}</button>` : ''}
           <button type="button" class="button override-source-toggle">${s.enabled ? esc(t('btnDisable')) : esc(t('btnEnable'))}</button>
         </div>
       </div>

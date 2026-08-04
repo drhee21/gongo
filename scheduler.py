@@ -104,13 +104,18 @@ def next_run_estimate(cfg: Dict[str, Any], last_run_iso: Optional[str], now: dat
     return None
 
 
-def run_collection_locked(lock: threading.Lock) -> Optional["collector.CollectRun"]:
+def run_collection_locked(lock: threading.Lock, triggering_user_id: Optional[str] = None) -> Optional["collector.CollectRun"]:
     """수동(/api/recollect)과 스케줄러가 공유하는 유일한 진입점 — collect_all()이 두
-    곳에서 동시에 실행되는 걸 막는다. 이미 다른 수집이 진행 중이면 None을 돌려준다."""
+    곳에서 동시에 실행되는 걸 막는다. 이미 다른 수집이 진행 중이면 None을 돌려준다.
+
+    triggering_user_id는 사용자가 직접 "업데이트"를 눌러서 트리거한 경우에만
+    전달된다 — 그 경우 배경 LLM 작업(K-스타트업 판정, KHIDI 마감일 추출, 레시피
+    복구)이 그 사용자 본인의 활성 키를 쓴다. 스케줄러가 자동으로 돌릴 때는 None이라
+    관리자 계정 중 하나로 대체된다."""
     if not lock.acquire(blocking=False):
         return None
     try:
-        return collector.collect_all(write_db=True)
+        return collector.collect_all(write_db=True, triggering_user_id=triggering_user_id)
     finally:
         lock.release()
 

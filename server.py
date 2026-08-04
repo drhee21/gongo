@@ -42,7 +42,7 @@ _shutdown_event = threading.Event()
 ADMIN_EMAILS = {
     e.strip().lower() for e in os.environ.get("ADMIN_EMAILS", "").split(",") if e.strip()
 }
-OVERRIDABLE_SOURCES = {"kstartup", "nrf", "kddf", "biohub_direct", "khidi_direct"}
+OVERRIDABLE_SOURCES = {"kstartup", "nrf", "kddf", "biohub_direct", "khidi_direct", "bizinfo", "g2b"}
 MAX_COMPANY_DOCUMENTS = 10
 
 
@@ -129,9 +129,14 @@ def add_runtime_fields(items):
     # 아직 판정되지 않은 공고(새로 수집됐지만 아직 분류 전)는 여기 포함되지 않으므로
     # 조용히 숨겨지지 않고 그대로 보인다.
     excluded_ids = database.get_excluded_notice_ids()
+    # 비활성화된 소스의 기존 공고는 DB에서 지우지 않지만(재활성화하면 바로 다시
+    # 보이도록), 꺼둔 동안은 목록에 노출하지 않는다.
+    disabled_sources = collector.get_disabled_source_ids()
     out = []
     for a in items:
         if a.get("id") in excluded_ids:
+            continue
+        if (a.get("src") or a.get("source")) in disabled_sources:
             continue
         b = dict(a)
         b["src"] = canonical_source_id(b.get("src") or b.get("source") or "unknown")
@@ -299,6 +304,10 @@ class Handler(BaseHTTPRequestHandler):
                     ("kddf", "국가신약개발사업단", (boards.get("kddf") or {}).get("list_url"), (boards.get("kddf") or {}).get("enabled", False)),
                     ("biohub_direct", "서울바이오허브", (boards.get("biohub_direct") or {}).get("list_url"), (boards.get("biohub_direct") or {}).get("enabled", False)),
                     ("khidi_direct", "보건산업진흥원/KHIDI", (boards.get("khidi_direct") or {}).get("list_url"), (boards.get("khidi_direct") or {}).get("enabled", False)),
+                    # bizinfo/g2b는 list_url이 아니라 API 키로 수집하므로 URL 재정의는
+                    # 의미가 없다 — 활성화 여부만 재정의 대상이다.
+                    ("bizinfo", "기업마당", None, (cfg.get("bizinfo") or {}).get("enabled", False)),
+                    ("g2b", "나라장터", None, (cfg.get("g2b") or {}).get("enabled", False)),
                 ]:
                     ov = overrides.get(sid) or {}
                     items.append({
@@ -492,7 +501,7 @@ class Handler(BaseHTTPRequestHandler):
                     self.send_json({"ok": False, "error": f"너무 자주 요청했습니다. {wait}초 후 다시 시도해주세요."}, status=429)
                     return
                 _last_recollect_at = now
-                run = scheduler.run_collection_locked(_collect_lock)
+                run = scheduler.run_collection_locked(_collect_lock, triggering_user_id=user["id"])
                 if run is None:
                     self.send_json({"ok": False, "error": "지금 다른 수집이 진행 중입니다. 잠시 후 다시 시도해주세요."}, status=429)
                     return
