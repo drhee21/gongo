@@ -7,7 +7,7 @@ import sqlite3
 import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Set
 
 ROOT = Path(__file__).resolve().parent
 DATA_DIR = ROOT / "data"
@@ -25,6 +25,13 @@ def connect() -> sqlite3.Connection:
     con.execute("PRAGMA journal_mode=WAL")
     con.execute("PRAGMA foreign_keys=ON")
     return con
+
+
+def _ensure_column(con: sqlite3.Connection, table: str, column: str, coltype: str) -> None:
+    """이미 배포된 DB에 새 컬럼을 안전하게 추가한다 (있으면 아무 것도 안 함)."""
+    cols = [r[1] for r in con.execute(f"PRAGMA table_info({table})").fetchall()]
+    if column not in cols:
+        con.execute(f"ALTER TABLE {table} ADD COLUMN {column} {coltype}")
 
 
 def _migrate_to_per_user(con: sqlite3.Connection, table: str) -> None:
@@ -60,6 +67,8 @@ def init_db() -> None:
                 elig_json TEXT,
                 url TEXT,
                 raw_json TEXT,
+                dates_unknown INTEGER DEFAULT 0,
+                rolling_confirmed INTEGER DEFAULT 0,
                 first_seen_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
@@ -71,8 +80,27 @@ def init_db() -> None:
                 state TEXT,
                 count INTEGER DEFAULT 0,
                 last_collected_at TEXT,
-                error TEXT
+                error TEXT,
+                anomaly INTEGER DEFAULT 0,
+                anomaly_note TEXT
             );
+
+            CREATE TABLE IF NOT EXISTS source_overrides (
+                source_id TEXT PRIMARY KEY,
+                list_url TEXT,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS source_run_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source_id TEXT NOT NULL,
+                count INTEGER NOT NULL,
+                state TEXT NOT NULL,
+                error TEXT,
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_source_run_history_source
+                ON source_run_history(source_id, created_at);
 
             CREATE TABLE IF NOT EXISTS users (
                 id TEXT PRIMARY KEY,
@@ -80,7 +108,19 @@ def init_db() -> None:
                 password_salt TEXT NOT NULL,
                 password_hash TEXT NOT NULL,
                 anthropic_api_key_enc TEXT,
+                bizinfo_api_key_enc TEXT,
+                is_admin INTEGER DEFAULT 0,
                 created_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS company_documents (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                filename TEXT NOT NULL,
+                content TEXT NOT NULL,
+                char_count INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
             );
 
             CREATE TABLE IF NOT EXISTS sessions (
@@ -129,14 +169,88 @@ def init_db() -> None:
                 FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
             );
 
+            CREATE TABLE IF NOT EXISTS notice_funding_classification (
+                notice_id TEXT PRIMARY KEY,
+                verdict TEXT NOT NULL,
+                method TEXT NOT NULL,
+                reason TEXT,
+                classified_at TEXT NOT NULL,
+                FOREIGN KEY(notice_id) REFERENCES notices(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS llm_provider_keys (
+                user_id TEXT NOT NULL,
+                provider TEXT NOT NULL,
+                key_enc TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (user_id, provider),
+                FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS source_recipes (
+                source_id TEXT PRIMARY KEY,
+                recipe_json TEXT NOT NULL,
+                discovered_at TEXT NOT NULL,
+                verified_ok INTEGER DEFAULT 0
+            );
+
+            CREATE TABLE IF NOT EXISTS custom_sources (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                list_url TEXT NOT NULL UNIQUE,
+                category TEXT,
+                enabled INTEGER DEFAULT 1,
+                created_by TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(created_by) REFERENCES users(id) ON DELETE SET NULL
+            );
+
             CREATE INDEX IF NOT EXISTS idx_notices_source ON notices(source);
             CREATE INDEX IF NOT EXISTS idx_notices_end ON notices(end_date);
             CREATE INDEX IF NOT EXISTS idx_notices_category ON notices(category);
+
+            CREATE TABLE IF NOT EXISTS app_settings (
+                key TEXT PRIMARY KEY,
+                value_json TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
             """
         )
+        _ensure_column(con, "users", "bizinfo_api_key_enc", "TEXT")
+        _ensure_column(con, "users", "is_admin", "INTEGER DEFAULT 0")
+        _ensure_column(con, "sources", "anomaly", "INTEGER DEFAULT 0")
+        _ensure_column(con, "sources", "anomaly_note", "TEXT")
+        _ensure_column(con, "notices", "dates_unknown", "INTEGER DEFAULT 0")
+        _ensure_column(con, "notices", "rolling_confirmed", "INTEGER DEFAULT 0")
+        _ensure_column(con, "source_overrides", "name", "TEXT")
+        _ensure_column(con, "source_overrides", "enabled_override", "INTEGER")
+
+        # 신규 가입자 온보딩 투어 기능을 추가하면서, 이 기능이 생기기 전부터 있던 기존
+        # 계정들도 로그인하면 갑자기 투어가 뜨게 되는 문제가 있었다(onboarding_done이
+        # 없으면 항상 false로 취급되므로). 이 마이그레이션은 딱 한 번만 실행되어 그
+        # 시점에 이미 존재하던 계정 전부를 "이미 온보딩 완료"로 표시한다 — 이후 새로
+        # 가입하는 계정만 실제로 투어를 보게 된다. get_app_setting/set_user_setting을
+        # 여기서 직접 못 쓰는 이유는 그 함수들이 init_db()를 다시 호출해서 재귀에
+        # 빠지기 때문이다(그래서 같은 커넥션으로 SQL을 직접 실행한다).
+        marker = con.execute("SELECT value_json FROM app_settings WHERE key='onboarding_backfill_done'").fetchone()
+        if not marker:
+            ts = now_iso()
+            for row in con.execute("SELECT id FROM users").fetchall():
+                con.execute(
+                    """
+                    INSERT INTO user_settings(user_id, key, value_json, updated_at) VALUES (?, 'onboarding_done', 'true', ?)
+                    ON CONFLICT(user_id, key) DO NOTHING
+                    """,
+                    (row["id"], ts),
+                )
+            con.execute(
+                "INSERT INTO app_settings(key, value_json, updated_at) VALUES ('onboarding_backfill_done', 'true', ?)",
+                (ts,),
+            )
 
 
-def upsert_notices(items: Iterable[Dict[str, Any]], prune: bool = True) -> int:
+def upsert_notices(items: Iterable[Dict[str, Any]], prune: bool = True, extra_keep_ids: Optional[Iterable[str]] = None) -> int:
     """Insert/update notices and their per-site source list.
 
     `prune=True` removes notices that are no longer part of the current
@@ -145,6 +259,11 @@ def upsert_notices(items: Iterable[Dict[str, Any]], prune: bool = True) -> int:
     accumulate forever. Callers should pass `prune=False` when `items` is a
     partial/fallback set (e.g. the sample data shown when every real source
     fails) so a temporary outage doesn't wipe out previously collected data.
+
+    `extra_keep_ids` are notice ids to exempt from pruning even though they
+    aren't in `items` this run -- e.g. ids belonging to a source that failed
+    (even after retry) this run, so a transient collection failure doesn't
+    delete that source's previously-collected notices.
     """
     init_db()
     items = list(items)
@@ -161,8 +280,8 @@ def upsert_notices(items: Iterable[Dict[str, Any]], prune: bool = True) -> int:
                 """
                 INSERT INTO notices (
                     id, source, title, org, category, start_date, end_date,
-                    budget, elig_json, url, raw_json, first_seen_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    budget, elig_json, url, raw_json, dates_unknown, rolling_confirmed, first_seen_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     source=excluded.source,
                     title=excluded.title,
@@ -174,6 +293,8 @@ def upsert_notices(items: Iterable[Dict[str, Any]], prune: bool = True) -> int:
                     elig_json=excluded.elig_json,
                     url=excluded.url,
                     raw_json=excluded.raw_json,
+                    dates_unknown=excluded.dates_unknown,
+                    rolling_confirmed=excluded.rolling_confirmed,
                     updated_at=excluded.updated_at
                 """,
                 (
@@ -188,6 +309,8 @@ def upsert_notices(items: Iterable[Dict[str, Any]], prune: bool = True) -> int:
                     json.dumps(a.get("elig"), ensure_ascii=False) if a.get("elig") is not None else None,
                     a.get("url") or "",
                     json.dumps(a, ensure_ascii=False),
+                    1 if a.get("dates_unknown") else 0,
+                    1 if a.get("rolling_confirmed") else 0,
                     ts,
                     ts,
                 ),
@@ -205,13 +328,24 @@ def upsert_notices(items: Iterable[Dict[str, Any]], prune: bool = True) -> int:
                     (nid, sid, s.get("url") or ""),
                 )
             count += 1
-        if prune and ids:
-            placeholders = ",".join("?" * len(ids))
+        keep_ids = ids + [i for i in (extra_keep_ids or []) if i]
+        if prune and keep_ids:
+            placeholders = ",".join("?" * len(keep_ids))
             con.execute(
                 f"DELETE FROM notices WHERE id NOT IN ({placeholders}) AND id NOT IN (SELECT notice_id FROM favorites)",
-                ids,
+                keep_ids,
             )
     return count
+
+
+def get_notice_ids_for_source(source_id: str) -> List[str]:
+    """이 소스가 이전에 수집한 공고 id 전부를 돌려준다. collect_all()이 이번 실행에서
+    이 소스가 (재시도 포함) 실패했을 때, upsert_notices()의 prune 단계에서 지우지
+    않도록 보존할 id 목록을 만드는 데 쓴다."""
+    init_db()
+    with connect() as con:
+        rows = con.execute("SELECT notice_id FROM notice_sources WHERE source=?", (source_id,)).fetchall()
+    return [r["notice_id"] for r in rows]
 
 
 def replace_source_status(statuses: Dict[str, Dict[str, Any]]) -> None:
@@ -221,15 +355,17 @@ def replace_source_status(statuses: Dict[str, Dict[str, Any]]) -> None:
         for sid, s in statuses.items():
             con.execute(
                 """
-                INSERT INTO sources (id, name, method, state, count, last_collected_at, error)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO sources (id, name, method, state, count, last_collected_at, error, anomaly, anomaly_note)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     name=excluded.name,
                     method=excluded.method,
                     state=excluded.state,
                     count=excluded.count,
                     last_collected_at=excluded.last_collected_at,
-                    error=excluded.error
+                    error=excluded.error,
+                    anomaly=excluded.anomaly,
+                    anomaly_note=excluded.anomaly_note
                 """,
                 (
                     sid,
@@ -239,8 +375,117 @@ def replace_source_status(statuses: Dict[str, Dict[str, Any]]) -> None:
                     int(s.get("n") or s.get("count") or 0),
                     s.get("last") or ts,
                     s.get("error"),
+                    1 if s.get("anomaly") else 0,
+                    s.get("anomaly_note"),
                 ),
             )
+
+
+HISTORY_KEEP_PER_SOURCE = 20
+ANOMALY_ZERO_MIN_AVG = 3       # 0건 경고를 띄우려면 최근 평균이 최소 이 정도는 되어야 함
+ANOMALY_DROP_MIN_AVG = 5       # 급감 경고를 띄우려면 최근 평균이 최소 이 정도는 되어야 함
+ANOMALY_DROP_RATIO = 0.3       # 최근 평균의 이 비율 미만이면 급감으로 간주
+
+
+def record_source_history(statuses: Dict[str, Dict[str, Any]]) -> None:
+    """매 수집 실행마다 소스별 건수를 append하고, 소스당 최근 N건만 남긴다."""
+    init_db()
+    ts = now_iso()
+    with connect() as con:
+        for sid, s in statuses.items():
+            con.execute(
+                "INSERT INTO source_run_history(source_id, count, state, error, created_at) VALUES (?, ?, ?, ?, ?)",
+                (sid, int(s.get("n") or s.get("count") or 0), s.get("state") or "미확인", s.get("error"), ts),
+            )
+            con.execute(
+                """
+                DELETE FROM source_run_history
+                WHERE source_id = ? AND id NOT IN (
+                    SELECT id FROM source_run_history WHERE source_id = ?
+                    ORDER BY created_at DESC LIMIT ?
+                )
+                """,
+                (sid, sid, HISTORY_KEEP_PER_SOURCE),
+            )
+
+
+def flag_source_anomalies(statuses: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    """이번 실행 건수를 소스별 최근 이력 평균과 비교해 이상 급감을 표시한다.
+
+    반드시 `record_source_history`로 이번 실행을 기록하기 *전에* 호출해야
+    한다 (그래야 비교 기준이 이번 실행을 제외한 과거 이력이 된다).
+    """
+    init_db()
+    out: Dict[str, Dict[str, Any]] = {}
+    with connect() as con:
+        for sid, s in statuses.items():
+            entry = dict(s)
+            rows = con.execute(
+                "SELECT count FROM source_run_history WHERE source_id = ? ORDER BY created_at DESC LIMIT ?",
+                (sid, HISTORY_KEEP_PER_SOURCE),
+            ).fetchall()
+            positive = [r["count"] for r in rows if r["count"] > 0]
+            avg = sum(positive) / len(positive) if positive else 0
+            current = int(s.get("n") or s.get("count") or 0)
+            entry["anomaly"] = False
+            entry["anomaly_note"] = None
+            if len(positive) >= 3 and avg >= ANOMALY_ZERO_MIN_AVG and current == 0:
+                entry["anomaly"] = True
+                entry["anomaly_note"] = f"최근 평균 {avg:.0f}건 대비 0건 — 사이트 구조 변경으로 수집이 깨졌을 수 있습니다."
+            elif len(positive) >= 3 and avg >= ANOMALY_DROP_MIN_AVG and 0 < current < avg * ANOMALY_DROP_RATIO:
+                entry["anomaly"] = True
+                entry["anomaly_note"] = f"최근 평균 {avg:.0f}건 대비 {current}건으로 급감했습니다."
+            out[sid] = entry
+    return out
+
+
+def get_source_overrides() -> Dict[str, Dict[str, Any]]:
+    """관리자가 재정의한 소스별 이름/URL/활성화 상태를 반환한다
+    ({source_id: {"list_url":.., "name":.., "enabled":True/False/None}}).
+    enabled가 None이면 재정의가 없다는 뜻 — 설정 파일(config.json)의 기본값을 그대로 따른다."""
+    init_db()
+    with connect() as con:
+        rows = con.execute(
+            "SELECT source_id, list_url, name, enabled_override FROM source_overrides"
+        ).fetchall()
+    out: Dict[str, Dict[str, Any]] = {}
+    for r in rows:
+        if not r["list_url"] and not r["name"] and r["enabled_override"] is None:
+            continue
+        out[r["source_id"]] = {
+            "list_url": r["list_url"] or None,
+            "name": r["name"] or None,
+            "enabled": None if r["enabled_override"] is None else bool(r["enabled_override"]),
+        }
+    return out
+
+
+def set_source_override(source_id: str, list_url: Optional[str], name: Optional[str] = None) -> None:
+    """소스 수집 URL/이름을 재정의한다. 둘 다 비어있으면 재정의를 해제한다.
+    활성화 여부 재정의는 set_source_enabled_override()로 별도 관리한다(토글 버튼이
+    이름/URL 수정과 별개 시점에 눌리므로, 이 함수는 enabled_override 컬럼을 건드리지 않는다)."""
+    init_db()
+    with connect() as con:
+        con.execute(
+            """
+            INSERT INTO source_overrides(source_id, list_url, name, updated_at) VALUES (?, ?, ?, ?)
+            ON CONFLICT(source_id) DO UPDATE SET list_url=excluded.list_url, name=excluded.name, updated_at=excluded.updated_at
+            """,
+            (source_id, list_url or None, name or None, now_iso()),
+        )
+
+
+def set_source_enabled_override(source_id: str, enabled: Optional[bool]) -> None:
+    """소스 활성화 여부를 재정의한다. enabled=None이면 재정의를 지우고 설정 파일 기본값을 따른다."""
+    init_db()
+    with connect() as con:
+        con.execute(
+            """
+            INSERT INTO source_overrides(source_id, enabled_override, updated_at) VALUES (?, ?, ?)
+            ON CONFLICT(source_id) DO UPDATE SET enabled_override=excluded.enabled_override, updated_at=excluded.updated_at
+            """,
+            (source_id, None if enabled is None else (1 if enabled else 0), now_iso()),
+        )
 
 
 def row_to_notice(row: sqlite3.Row) -> Dict[str, Any]:
@@ -260,6 +505,8 @@ def row_to_notice(row: sqlite3.Row) -> Dict[str, Any]:
         "end": row["end_date"],
         "budget": row["budget"],
         "elig": elig,
+        "dates_unknown": bool(row["dates_unknown"]) if "dates_unknown" in row.keys() else False,
+        "rolling_confirmed": bool(row["rolling_confirmed"]) if "rolling_confirmed" in row.keys() else False,
         "url": row["url"],
         "favorite": bool(row["favorite"]),
         "first_seen_at": row["first_seen_at"],
@@ -309,22 +556,38 @@ def list_notices(
         return notices
 
 
+def hide_bizinfo_only(notices: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """기업마당 API로만 확보된 공고(다른 무료 소스에 없는 것)를 걸러낸다.
+
+    기업마당 API 키를 등록하지 않은 사용자(비로그인 포함)에게는 이 공고들을
+    숨긴다. K-스타트업 등 무료 소스에도 함께 올라온 공고는 그 소스를 통해
+    합법적으로 볼 수 있으므로 그대로 노출한다.
+    """
+    out = []
+    for n in notices:
+        source_ids = {s.get("id") for s in (n.get("sources") or [])} or {n.get("src")}
+        if source_ids - {"bizinfo"}:
+            out.append(n)
+    return out
+
+
 SOURCE_ALIASES = {
     "biohub_direct": "biohub",
     "khidi_direct": "khidi",
 }
 
 SOURCE_META = {
-    "kstartup": {"name": "K-스타트업", "method": "HTML"},
+    "kstartup": {"name": "K-스타트업", "method": "레시피"},
     "bizinfo": {"name": "기업마당", "method": "API"},
     "biohub": {"name": "서울바이오허브", "method": "직접/기업마당"},
     "khidi": {"name": "보건산업진흥원/KHIDI", "method": "직접/기업마당"},
-    "kddf": {"name": "국가신약개발사업단", "method": "게시판"},
-    "nrf": {"name": "한국연구재단", "method": "게시판"},
+    "kddf": {"name": "국가신약개발사업단", "method": "레시피"},
+    "nrf": {"name": "한국연구재단", "method": "레시피"},
+    "g2b": {"name": "나라장터", "method": "API"},
     "sample": {"name": "샘플", "method": "내장 데이터"},
 }
 
-SOURCE_ORDER = ["bizinfo", "kstartup", "biohub", "khidi", "kddf", "nrf", "sample"]
+SOURCE_ORDER = ["bizinfo", "kstartup", "biohub", "khidi", "kddf", "nrf", "g2b", "sample"]
 
 
 def canonical_source_id(source_id: str) -> str:
@@ -365,11 +628,16 @@ def list_sources(clean: bool = True) -> List[Dict[str, Any]]:
             "count": 0,
             "last_collected_at": row.get("last_collected_at"),
             "error": None,
+            "anomaly": False,
+            "anomaly_note": None,
         })
         if row.get("last_collected_at") and (not g.get("last_collected_at") or row.get("last_collected_at") > g.get("last_collected_at")):
             g["last_collected_at"] = row.get("last_collected_at")
         if row.get("error") and not g.get("error"):
             g["error"] = row.get("error")
+        if row.get("anomaly") and not g.get("anomaly"):
+            g["anomaly"] = True
+            g["anomaly_note"] = row.get("anomaly_note")
         # Keep a non-waiting state only when there is no actual notice count.
         if g.get("state") in {"대기", "비활성화", "0건", "미확인"} and row.get("state"):
             g["state"] = row.get("state")
@@ -387,6 +655,8 @@ def list_sources(clean: bool = True) -> List[Dict[str, Any]]:
             "count": 0,
             "last_collected_at": None,
             "error": None,
+            "anomaly": False,
+            "anomaly_note": None,
         })
         g["count"] = int(cnt)
         if cnt > 0:
@@ -404,7 +674,9 @@ def list_sources(clean: bool = True) -> List[Dict[str, Any]]:
             continue
         # Hide non-actionable zero rows.  They are still available in the raw DB,
         # but the user-facing sidebar should be clean and non-duplicated.
-        if cnt == 0 and state in {"대기", "비활성화", "0건", "오류", "차단(robots)", "미확인"}:
+        # Anomaly-flagged rows are the one exception: hiding those would defeat
+        # the whole point of surfacing a silent scraping failure.
+        if cnt == 0 and state in {"대기", "비활성화", "0건", "오류", "차단(robots)", "미확인"} and not g.get("anomaly"):
             continue
         cleaned.append(g)
 
@@ -440,10 +712,27 @@ def favorite_ids(user_id: str) -> List[str]:
 
 
 def save_ai_fit(user_id: str, results: Dict[str, Dict[str, str]], profile_hash: str) -> None:
+    """AI 판정 결과를 저장한다.
+
+    AI 분석은 공고 목록을 읽어온 뒤 여러 분에 걸쳐 진행되므로, 그 사이에
+    재수집이 일어나 일부 공고가 삭제될 수 있다(더 이상 존재하지 않는
+    notice_id는 FOREIGN KEY 제약을 위반한다). 이미 삭제된 공고에 대한
+    판정은 어차피 화면에 보여줄 대상이 없으므로 조용히 건너뛰고, 나머지
+    결과는 정상 저장한다 — 하나가 실패했다고 전체 저장이 롤백되지 않게 한다.
+    """
     init_db()
     ts = now_iso()
     with connect() as con:
+        existing_ids = {
+            row["id"]
+            for row in con.execute(
+                f"SELECT id FROM notices WHERE id IN ({','.join('?' * len(results))})",
+                list(results.keys()),
+            ).fetchall()
+        } if results else set()
         for nid, r in results.items():
+            if nid not in existing_ids:
+                continue
             con.execute(
                 """
                 INSERT INTO ai_fit(user_id, notice_id, fit, reason, profile_hash, updated_at)
@@ -465,6 +754,68 @@ def get_ai_fit_map(user_id: str, profile_hash: str) -> Dict[str, Dict[str, str]]
             "SELECT notice_id, fit, reason FROM ai_fit WHERE user_id=? AND profile_hash=?", (user_id, profile_hash)
         ).fetchall()
     return {r["notice_id"]: {"fit": r["fit"], "reason": r["reason"]} for r in rows}
+
+
+def get_unclassified_ids(ids: Iterable[str]) -> List[str]:
+    """전달된 notice id 중 아직 notice_funding_classification에 없는(= 한 번도
+    분류되지 않은) id만 돌려준다. collect_all()이 매번 전체를 다시 분류하지
+    않고 새 공고만 LLM에 보내도록 하는 데 쓴다."""
+    ids = [i for i in ids if i]
+    if not ids:
+        return []
+    init_db()
+    with connect() as con:
+        placeholders = ",".join("?" * len(ids))
+        classified = {
+            r["notice_id"]
+            for r in con.execute(
+                f"SELECT notice_id FROM notice_funding_classification WHERE notice_id IN ({placeholders})", ids
+            ).fetchall()
+        }
+    return [i for i in ids if i not in classified]
+
+
+def save_funding_classifications(results: Dict[str, Dict[str, str]], method: str) -> None:
+    """{notice_id: {"verdict": "keep"|"exclude", "reason": str}} 형태의 분류 결과를
+    저장한다. `method`는 "rule" 또는 "llm" — 나중에 어떤 경로로 판정됐는지 구분하기
+    위함이다."""
+    if not results:
+        return
+    init_db()
+    ts = now_iso()
+    with connect() as con:
+        existing_ids = {
+            row["id"]
+            for row in con.execute(
+                f"SELECT id FROM notices WHERE id IN ({','.join('?' * len(results))})",
+                list(results.keys()),
+            ).fetchall()
+        }
+        for nid, r in results.items():
+            if nid not in existing_ids:
+                continue
+            con.execute(
+                """
+                INSERT INTO notice_funding_classification(notice_id, verdict, method, reason, classified_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(notice_id) DO UPDATE SET
+                    verdict=excluded.verdict,
+                    method=excluded.method,
+                    reason=excluded.reason,
+                    classified_at=excluded.classified_at
+                """,
+                (nid, r.get("verdict"), method, r.get("reason"), ts),
+            )
+
+
+def get_excluded_notice_ids() -> Set[str]:
+    """verdict='exclude'로 분류된 notice id 전체. 공고 목록 API가 이 id들을
+    걸러내는 데 쓴다 — 아직 분류되지 않은 공고는 여기 포함되지 않으므로
+    기본적으로 화면에 계속 보인다(판정 전에 조용히 숨겨지지 않는다)."""
+    init_db()
+    with connect() as con:
+        rows = con.execute("SELECT notice_id FROM notice_funding_classification WHERE verdict='exclude'").fetchall()
+    return {r["notice_id"] for r in rows}
 
 
 def get_user_setting(user_id: str, key: str, default: Optional[Any] = None) -> Any:
@@ -490,6 +841,32 @@ def set_user_setting(user_id: str, key: str, value: Any) -> None:
             ON CONFLICT(user_id, key) DO UPDATE SET value_json=excluded.value_json, updated_at=excluded.updated_at
             """,
             (user_id, key, json.dumps(value, ensure_ascii=False), now_iso()),
+        )
+
+
+def get_app_setting(key: str, default: Optional[Any] = None) -> Any:
+    """user_settings와 같은 패턴이지만 사용자별이 아니라 앱 전체에 하나만 있는 설정용이다
+    (예: 자동 수집 일정)."""
+    init_db()
+    with connect() as con:
+        row = con.execute("SELECT value_json FROM app_settings WHERE key=?", (key,)).fetchone()
+    if not row:
+        return default
+    try:
+        return json.loads(row["value_json"])
+    except Exception:
+        return default
+
+
+def set_app_setting(key: str, value: Any) -> None:
+    init_db()
+    with connect() as con:
+        con.execute(
+            """
+            INSERT INTO app_settings(key, value_json, updated_at) VALUES (?, ?, ?)
+            ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json, updated_at=excluded.updated_at
+            """,
+            (key, json.dumps(value, ensure_ascii=False), now_iso()),
         )
 
 
@@ -520,10 +897,287 @@ def get_user_by_id(user_id: str) -> Optional[Dict[str, Any]]:
     return dict(row) if row else None
 
 
-def set_user_api_key(user_id: str, encrypted_key: Optional[str]) -> None:
+def set_user_admin(user_id: str, is_admin: bool) -> None:
     init_db()
     with connect() as con:
-        con.execute("UPDATE users SET anthropic_api_key_enc=? WHERE id=?", (encrypted_key, user_id))
+        con.execute("UPDATE users SET is_admin=? WHERE id=?", (1 if is_admin else 0, user_id))
+
+
+def set_user_bizinfo_key(user_id: str, encrypted_key: Optional[str]) -> None:
+    init_db()
+    with connect() as con:
+        con.execute("UPDATE users SET bizinfo_api_key_enc=? WHERE id=?", (encrypted_key, user_id))
+
+
+def get_any_bizinfo_key_enc() -> Optional[str]:
+    """수집기가 사용할 기업마당 API 키를 등록된 사용자 중에서 찾는다.
+
+    config.json에는 더 이상 공용 키를 두지 않는다 — 실제로 그 키를
+    등록한 사용자 본인만 결과를 볼 수 있어야 하므로, 수집도 등록된
+    사용자의 키로만 이뤄져야 한다. 관리자가 등록한 키를 우선하고,
+    없으면 아무 사용자나 등록한 키를 사용한다. 암호화된 채로 반환하므로
+    호출부에서 auth.decrypt_secret으로 복호화해야 한다.
+    """
+    init_db()
+    with connect() as con:
+        row = con.execute(
+            "SELECT bizinfo_api_key_enc FROM users WHERE bizinfo_api_key_enc IS NOT NULL "
+            "ORDER BY is_admin DESC, created_at ASC LIMIT 1"
+        ).fetchone()
+    return row["bizinfo_api_key_enc"] if row else None
+
+
+# ──────────────────────────── LLM 공급자 키 ────────────────────────────
+
+def set_llm_provider_key(user_id: str, provider: str, encrypted_key: Optional[str]) -> None:
+    init_db()
+    with connect() as con:
+        if encrypted_key is None:
+            con.execute(
+                "DELETE FROM llm_provider_keys WHERE user_id=? AND provider=?", (user_id, provider)
+            )
+        else:
+            con.execute(
+                """
+                INSERT INTO llm_provider_keys(user_id, provider, key_enc, updated_at) VALUES (?, ?, ?, ?)
+                ON CONFLICT(user_id, provider) DO UPDATE SET key_enc=excluded.key_enc, updated_at=excluded.updated_at
+                """,
+                (user_id, provider, encrypted_key, now_iso()),
+            )
+
+
+def get_llm_provider_key(user_id: str, provider: str) -> Optional[str]:
+    init_db()
+    with connect() as con:
+        row = con.execute(
+            "SELECT key_enc FROM llm_provider_keys WHERE user_id=? AND provider=?", (user_id, provider)
+        ).fetchone()
+    return row["key_enc"] if row else None
+
+
+def get_any_llm_provider_key_enc(provider: str) -> Optional[str]:
+    """수집기 등 로그인 사용자가 없는 백그라운드 작업이 쓸 LLM 키를 찾는다.
+
+    get_any_bizinfo_key_enc()와 동일한 패턴: 관리자가 등록한 키를 우선하고,
+    없으면 아무 사용자나 등록한 키를 사용한다.
+    """
+    init_db()
+    with connect() as con:
+        row = con.execute(
+            """
+            SELECT k.key_enc FROM llm_provider_keys k JOIN users u ON u.id = k.user_id
+            WHERE k.provider=? ORDER BY u.is_admin DESC, u.created_at ASC LIMIT 1
+            """,
+            (provider,),
+        ).fetchone()
+    return row["key_enc"] if row else None
+
+
+# ──────────────────────────── 수집 레시피 ────────────────────────────
+
+def get_any_llm_key_enc(provider: str) -> Optional[str]:
+    """수집기가 쓸 LLM 키를 찾는다. get_any_bizinfo_key_enc()와 동일한 패턴이되,
+    anthropic은 새 llm_provider_keys 테이블에 없으면 레거시 users.anthropic_api_key_enc
+    컬럼도 확인한다 (신규 테이블로 옮기기 전 등록된 사용자도 계속 동작하도록).
+    """
+    key = get_any_llm_provider_key_enc(provider)
+    if key:
+        return key
+    if provider != "anthropic":
+        return None
+    init_db()
+    with connect() as con:
+        row = con.execute(
+            "SELECT anthropic_api_key_enc FROM users WHERE anthropic_api_key_enc IS NOT NULL "
+            "ORDER BY is_admin DESC, created_at ASC LIMIT 1"
+        ).fetchone()
+    return row["anthropic_api_key_enc"] if row else None
+
+
+def get_any_llm_preference() -> Optional[Dict[str, Any]]:
+    """로그인 사용자가 없는 백그라운드 작업(수집기 등)이 쓸 모델 설정을 찾는다.
+
+    관리자가 골라둔 모델을 우선하고, 없으면 아무 사용자나 설정해둔 모델을 쓴다.
+    아무도 설정하지 않았으면 None을 반환하며, 호출부에서 llm.DEFAULT_MODEL_ID로
+    떨어지면 된다.
+    """
+    init_db()
+    with connect() as con:
+        row = con.execute(
+            """
+            SELECT s.value_json FROM user_settings s JOIN users u ON u.id = s.user_id
+            WHERE s.key='llm_preference' ORDER BY u.is_admin DESC, u.created_at ASC LIMIT 1
+            """
+        ).fetchone()
+    if not row:
+        return None
+    try:
+        return json.loads(row["value_json"])
+    except Exception:
+        return None
+
+
+def get_source_recipe(source_id: str) -> Optional[Dict[str, Any]]:
+    init_db()
+    with connect() as con:
+        row = con.execute(
+            "SELECT recipe_json, discovered_at, verified_ok FROM source_recipes WHERE source_id=?",
+            (source_id,),
+        ).fetchone()
+    if not row:
+        return None
+    try:
+        recipe = json.loads(row["recipe_json"])
+    except Exception:
+        return None
+    return {
+        "recipe": recipe,
+        "discovered_at": row["discovered_at"],
+        "verified_ok": bool(row["verified_ok"]),
+    }
+
+
+def set_source_recipe(source_id: str, recipe: Dict[str, Any], verified_ok: bool = False) -> None:
+    init_db()
+    with connect() as con:
+        con.execute(
+            """
+            INSERT INTO source_recipes(source_id, recipe_json, discovered_at, verified_ok) VALUES (?, ?, ?, ?)
+            ON CONFLICT(source_id) DO UPDATE SET recipe_json=excluded.recipe_json,
+                discovered_at=excluded.discovered_at, verified_ok=excluded.verified_ok
+            """,
+            (source_id, json.dumps(recipe, ensure_ascii=False), now_iso(), 1 if verified_ok else 0),
+        )
+
+
+# ──────────────────────────── 커스텀 소스(관리자가 URL만으로 등록) ────────────────────────────
+# source_recipes는 레시피 본문 캐시일 뿐, 그 source_id가 애초에 존재한다는 사실 자체는
+# config.json의 boards나 코드에 하드코딩된 소스에 의존해왔다. custom_sources는 그 "존재"를
+# DB에 직접 갖는 소스를 위한 테이블이다 — 이름/URL/카테고리/활성화 여부만 갖고, 수집 결과
+# 상태(건수/최근 수집 시각/오류)는 기존 sources 테이블에 그대로 쌓인다(같은 id로 조인).
+
+def insert_custom_source(source_id: str, name: str, list_url: str, category: Optional[str], created_by: Optional[str]) -> None:
+    init_db()
+    ts = now_iso()
+    with connect() as con:
+        con.execute(
+            "INSERT INTO custom_sources(id, name, list_url, category, enabled, created_by, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, 1, ?, ?, ?)",
+            (source_id, name, list_url, category, created_by, ts, ts),
+        )
+
+
+def get_custom_source(source_id: str) -> Optional[Dict[str, Any]]:
+    init_db()
+    with connect() as con:
+        row = con.execute(
+            "SELECT id, name, list_url, category, enabled FROM custom_sources WHERE id=?", (source_id,)
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def update_custom_source(source_id: str, name: str, list_url: str, category: Optional[str]) -> None:
+    """URL 변경(재발견) 후 확정 시 기존 커스텀 소스 행을 그 자리에서 갱신한다 —
+    id를 그대로 유지해야 sources/notices의 기존 연결이 안 끊긴다."""
+    init_db()
+    with connect() as con:
+        con.execute(
+            "UPDATE custom_sources SET name=?, list_url=?, category=?, updated_at=? WHERE id=?",
+            (name, list_url, category, now_iso(), source_id),
+        )
+
+
+def rename_custom_source(source_id: str, name: str) -> None:
+    """URL은 그대로 두고 이름만 바꾼다 — 레시피가 그대로 유효하므로 재발견이 필요 없다.
+
+    sources(수집 결과 상태 캐시)의 name도 같이 갱신해서, 다음 수집 전에도 공고
+    목록의 소스 배지가 새 이름으로 바로 보이게 한다. replace_source_status()는
+    전체 행을 덮어써서 count/state/error가 기본값으로 초기화되므로 쓰지 않고,
+    name 컬럼만 직접 갱신한다(아직 한 번도 수집되지 않아 sources에 행이 없으면
+    조용히 no-op — 다음 수집 때 정상적으로 채워진다).
+    """
+    init_db()
+    with connect() as con:
+        con.execute(
+            "UPDATE custom_sources SET name=?, updated_at=? WHERE id=?",
+            (name, now_iso(), source_id),
+        )
+        con.execute("UPDATE sources SET name=? WHERE id=?", (name, source_id))
+
+
+def get_enabled_custom_sources() -> List[Dict[str, Any]]:
+    """collect_all()이 매 실행마다 도는, 활성화된 커스텀 소스 목록."""
+    init_db()
+    with connect() as con:
+        rows = con.execute(
+            "SELECT id, name, list_url, category FROM custom_sources WHERE enabled=1 ORDER BY created_at"
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def list_custom_sources() -> List[Dict[str, Any]]:
+    """관리자 화면용 — 상태(sources)와 레시피 검증 정보(source_recipes)까지 조인해서 반환한다."""
+    init_db()
+    with connect() as con:
+        rows = con.execute(
+            """
+            SELECT cs.id, cs.name, cs.list_url, cs.category, cs.enabled, cs.created_at,
+                   s.state, s.count, s.last_collected_at, s.error, s.anomaly, s.anomaly_note,
+                   sr.verified_ok, sr.discovered_at, sr.recipe_json
+            FROM custom_sources cs
+            LEFT JOIN sources s ON s.id = cs.id
+            LEFT JOIN source_recipes sr ON sr.source_id = cs.id
+            ORDER BY cs.created_at DESC
+            """
+        ).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        recipe_json = d.pop("recipe_json", None)
+        uses_detail_fetch = False
+        if recipe_json:
+            try:
+                field_map = json.loads(recipe_json).get("field_map") or {}
+                uses_detail_fetch = any(v.get("source") == "detail" for v in field_map.values())
+            except Exception:
+                uses_detail_fetch = False
+        d["uses_detail_fetch"] = uses_detail_fetch
+        out.append(d)
+    return out
+
+
+def set_custom_source_enabled(source_id: str, enabled: bool) -> None:
+    init_db()
+    with connect() as con:
+        con.execute(
+            "UPDATE custom_sources SET enabled=?, updated_at=? WHERE id=?",
+            (1 if enabled else 0, now_iso(), source_id),
+        )
+
+
+def delete_custom_source(source_id: str) -> None:
+    init_db()
+    with connect() as con:
+        con.execute("DELETE FROM custom_sources WHERE id=?", (source_id,))
+        con.execute("DELETE FROM source_recipes WHERE source_id=?", (source_id,))
+        con.execute("DELETE FROM sources WHERE id=?", (source_id,))
+
+
+def delete_notices_by_source(source_id: str, spare_favorites: bool = True) -> None:
+    """소스를 완전히 제거할 때(관리자 '삭제') 그 소스의 공고를 즉시 지운다.
+
+    upsert_notices(prune=True)의 "즐겨찾기된 공고는 지우지 않는다" 규칙과 동일하게,
+    누군가 즐겨찾기한 공고까지 함께 사라지지 않도록 기본으로 보호한다.
+    """
+    init_db()
+    with connect() as con:
+        if spare_favorites:
+            con.execute(
+                "DELETE FROM notices WHERE source=? AND id NOT IN (SELECT notice_id FROM favorites)",
+                (source_id,),
+            )
+        else:
+            con.execute("DELETE FROM notices WHERE source=?", (source_id,))
 
 
 def create_session(user_id: str, token: str, ttl_days: int = 30) -> None:
@@ -554,3 +1208,32 @@ def delete_session(token: str) -> None:
     init_db()
     with connect() as con:
         con.execute("DELETE FROM sessions WHERE token=?", (token,))
+
+
+# ──────────────────────────── 회사 문서 ────────────────────────────
+
+def add_company_document(user_id: str, filename: str, content: str) -> str:
+    init_db()
+    doc_id = uuid.uuid4().hex
+    with connect() as con:
+        con.execute(
+            "INSERT INTO company_documents(id, user_id, filename, content, char_count, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (doc_id, user_id, filename, content, len(content), now_iso()),
+        )
+    return doc_id
+
+
+def list_company_documents(user_id: str) -> List[Dict[str, Any]]:
+    init_db()
+    with connect() as con:
+        rows = con.execute(
+            "SELECT id, filename, content, char_count, created_at FROM company_documents WHERE user_id=? ORDER BY created_at DESC",
+            (user_id,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def delete_company_document(user_id: str, doc_id: str) -> None:
+    init_db()
+    with connect() as con:
+        con.execute("DELETE FROM company_documents WHERE user_id=? AND id=?", (user_id, doc_id))
