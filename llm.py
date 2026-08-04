@@ -39,12 +39,26 @@ MODEL_CATALOG: List[Dict[str, str]] = [
     {"id": "openai/gpt-5-mini", "label": "GPT-5 mini", "provider": "openai"},
     # OpenRouter는 Anthropic/OpenAI를 직접 호출하는 것과 별개로, 다른 공급자 계열
     # 모델을 키 하나로 쓸 수 있게 해준다 — 여기서는 이미 위에서 직접 지원하는
-    # Anthropic/OpenAI 대신, OpenRouter로만 접근 가능한 계열 위주로 추린다.
-    {"id": "openrouter/google/gemini-3-pro-preview", "label": "Gemini 3 Pro (OpenRouter)", "provider": "openrouter"},
+    # Anthropic/OpenAI 대신, OpenRouter로만 접근 가능한 주요 공급자마다 대표
+    # 모델을 하나씩 추렸다(OpenRouter 자체 모델 목록 API로 실제 존재하는 id인지
+    # 확인함). 로플레이 파인튜닝 등 군소/커뮤니티 공급자는 제외했다.
+    {"id": "openrouter/google/gemini-3.1-pro-preview", "label": "Gemini 3.1 Pro (OpenRouter)", "provider": "openrouter"},
     {"id": "openrouter/google/gemini-2.5-flash", "label": "Gemini 2.5 Flash (OpenRouter)", "provider": "openrouter"},
     {"id": "openrouter/deepseek/deepseek-v3.2", "label": "DeepSeek V3.2 (OpenRouter)", "provider": "openrouter"},
     {"id": "openrouter/mistralai/mistral-large-2512", "label": "Mistral Large (OpenRouter)", "provider": "openrouter"},
-    {"id": "openrouter/x-ai/grok-4", "label": "Grok 4 (OpenRouter)", "provider": "openrouter"},
+    {"id": "openrouter/x-ai/grok-4.5", "label": "Grok 4.5 (OpenRouter)", "provider": "openrouter"},
+    {"id": "openrouter/meta-llama/llama-4-maverick", "label": "Llama 4 Maverick (OpenRouter)", "provider": "openrouter"},
+    {"id": "openrouter/qwen/qwen3-max", "label": "Qwen3 Max (OpenRouter)", "provider": "openrouter"},
+    {"id": "openrouter/cohere/command-a", "label": "Cohere Command A (OpenRouter)", "provider": "openrouter"},
+    {"id": "openrouter/perplexity/sonar-pro", "label": "Perplexity Sonar Pro (OpenRouter)", "provider": "openrouter"},
+    {"id": "openrouter/amazon/nova-premier-v1", "label": "Amazon Nova Premier (OpenRouter)", "provider": "openrouter"},
+    {"id": "openrouter/microsoft/phi-4", "label": "Microsoft Phi-4 (OpenRouter)", "provider": "openrouter"},
+    {"id": "openrouter/nvidia/nemotron-3-ultra-550b-a55b", "label": "NVIDIA Nemotron 3 Ultra (OpenRouter)", "provider": "openrouter"},
+    {"id": "openrouter/ai21/jamba-large-1.7", "label": "AI21 Jamba Large 1.7 (OpenRouter)", "provider": "openrouter"},
+    {"id": "openrouter/z-ai/glm-5.2", "label": "Zhipu GLM 5.2 (OpenRouter)", "provider": "openrouter"},
+    {"id": "openrouter/moonshotai/kimi-k3", "label": "Moonshot Kimi K3 (OpenRouter)", "provider": "openrouter"},
+    {"id": "openrouter/minimax/minimax-m3", "label": "MiniMax M3 (OpenRouter)", "provider": "openrouter"},
+    {"id": "openrouter/upstage/solar-pro-3", "label": "Upstage Solar Pro 3 (OpenRouter)", "provider": "openrouter"},
 ]
 MODEL_BY_ID: Dict[str, Dict[str, str]] = {m["id"]: m for m in MODEL_CATALOG}
 DEFAULT_MODEL_ID = "anthropic/claude-opus-4-8"
