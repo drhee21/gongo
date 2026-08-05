@@ -287,7 +287,14 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({"ok": True, "items": enriched})
                 return
             if path == "/api/sources":
-                self.send_json({"ok": True, "items": database.list_sources(), "raw": database.list_sources(clean=False)})
+                displayed_counts = database.get_displayed_counts_by_source()
+                disabled_sources = collector.get_disabled_source_ids()
+                for sid in disabled_sources:
+                    displayed_counts[database.canonical_source_id(sid)] = 0
+                raw = database.list_sources(clean=False)
+                for r in raw:
+                    r["displayed_count"] = displayed_counts.get(database.canonical_source_id(r.get("id") or ""), 0)
+                self.send_json({"ok": True, "items": database.list_sources(), "raw": raw})
                 return
             if path == "/api/admin/source-overrides":
                 user = current_user(self)

@@ -193,7 +193,7 @@ const TRANSLATIONS = {
     emptySources: '소스가 없습니다.',
     emptyDocs: '등록된 문서가 없습니다.',
 
-    colId: 'ID', colSource: '소스', colState: '상태', colCount: '건수', colError: '오류',
+    colId: 'ID', colSource: '소스', colState: '상태', colCount: '수집 건수', colDisplayedCount: '표시 건수', colError: '오류',
     previewColTitle: '제목', previewColOrg: '기관', previewColPeriod: '기간', previewColUrl: 'URL',
 
     btnEdit: '수정',
@@ -455,7 +455,7 @@ const TRANSLATIONS = {
     emptySources: 'No sources.',
     emptyDocs: 'No documents uploaded.',
 
-    colId: 'ID', colSource: 'Source', colState: 'State', colCount: 'Count', colError: 'Error',
+    colId: 'ID', colSource: 'Source', colState: 'State', colCount: 'Fetched', colDisplayedCount: 'Displayed', colError: 'Error',
     previewColTitle: 'Title', previewColOrg: 'Org', previewColPeriod: 'Period', previewColUrl: 'URL',
 
     btnEdit: 'Edit',
