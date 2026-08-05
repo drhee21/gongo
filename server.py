@@ -878,7 +878,10 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 company = database.get_user_setting(user["id"], "company", {})
                 documents = database.list_company_documents(user["id"])
-                notices = database.list_notices()
+                # 화면에 아예 안 보이는 공고(자금성 판정 exclude, 비활성화된 소스)까지
+                # 판정하면 LLM 호출만 낭비되고 결과도 쓸 데가 없다 — add_runtime_fields()가
+                # /api/notices 목록에 적용하는 것과 같은 필터를 여기서도 그대로 적용한다.
+                notices = add_runtime_fields(database.list_notices())
                 results = ai_match.judge_company_fit(
                     notices, company, api_key, documents=documents, model_id=model_id
                 )
