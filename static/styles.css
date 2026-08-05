@@ -64,9 +64,11 @@ input,select{background:var(--panel2);border:1px solid var(--line);color:var(--t
 .ai-reason-tag{display:block;font-size:11px;font-weight:700;color:var(--muted);margin-bottom:2px}
 .ai-reason-text{color:var(--text)}
 .right{display:flex;flex-direction:column;gap:6px;align-items:flex-end}
-.star{background:transparent;border:0;color:var(--muted);font-size:26px;cursor:pointer;align-self:flex-end}
+.star{background:transparent;border:0;color:var(--muted);cursor:pointer;align-self:flex-end;width:34px;height:34px;padding:0;display:flex;align-items:center;justify-content:center}
+.star svg{fill:none;stroke:currentColor;stroke-width:1.6px;stroke-linejoin:round}
 .star.on{color:var(--warn)}
-.detail-toggle{background:transparent;border:1px solid var(--line);color:var(--muted);font-size:12px;border-radius:999px;padding:5px 10px;cursor:pointer;white-space:nowrap}
+.star.on svg{fill:currentColor}
+.detail-toggle{background:transparent;border:1px solid var(--line);color:var(--muted);font-size:12px;border-radius:999px;padding:5px 6px;cursor:pointer;white-space:nowrap;width:62px;text-align:center}
 .detail-toggle:hover{color:var(--brand);border-color:var(--brand)}
 .detail-caret{display:inline-block;transition:transform .15s ease}
 .notice.open-detail .detail-caret{transform:rotate(180deg)}
@@ -99,7 +101,8 @@ pre{white-space:pre-wrap;background:var(--panel2);border:1px solid var(--line);b
 .day-entry a{color:var(--text);text-decoration:none;flex:1}
 .empty{color:var(--muted);padding:30px;text-align:center;border:1px dashed var(--line);border-radius:14px}
 .cal-nav{display:flex;align-items:center;gap:8px}
-.cal-month-label{font-weight:700;min-width:88px;text-align:center}
+.cal-month-label{font-weight:700;width:92px;display:inline-block;text-align:center}
+#calToday{width:68px;text-align:center}
 .cal-grid{margin-bottom:20px}
 .cal-weekdays{display:grid;grid-template-columns:repeat(7,1fr);gap:6px;margin-bottom:6px;color:var(--muted);font-size:12px;text-align:center}
 .cal-cells{display:grid;grid-template-columns:repeat(7,1fr);gap:6px}

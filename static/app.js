@@ -127,7 +127,7 @@ function noticeHTML(a){
       ${aiReasonRow(a)}
     </div>
     <div class="right">
-      <button class="star ${a.favorite?'on':''}" data-star="${esc(a.id)}">${a.favorite?'★':'☆'}</button>
+      <button class="star ${a.favorite?'on':''}" data-star="${esc(a.id)}" aria-label="${esc(t('favTitle'))}" aria-pressed="${a.favorite?'true':'false'}"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M12 2.5l2.9 6.6 7.1.6-5.4 4.7 1.6 7-6.2-3.9-6.2 3.9 1.6-7L2 9.7l7.1-.6z"/></svg></button>
       <button class="detail-toggle" data-detail-toggle="${esc(a.id)}" aria-expanded="false">${esc(t('detailToggle'))} <span class="detail-caret">▾</span></button>
     </div>
     <div class="detail">
@@ -254,7 +254,7 @@ function renderCalendar(){
   const {y, m} = calViewDate;
   const monthLabel = $('#calMonthLabel');
   if(monthLabel){
-    const MONTH_NAMES_EN = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+    const MONTH_NAMES_EN = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
     monthLabel.textContent = currentLang === 'en' ? `${MONTH_NAMES_EN[m-1]} ${y}` : `${y}년 ${m}월`;
   }
 
