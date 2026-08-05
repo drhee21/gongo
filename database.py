@@ -776,6 +776,30 @@ def list_sources(clean: bool = True) -> List[Dict[str, Any]]:
     return cleaned
 
 
+def get_displayed_counts_by_source() -> Dict[str, int]:
+    """소스별로 실제 화면에 표시되는 공고 수를 센다(제외 판정된 공고는 뺀다).
+
+    sources.count(관리자 화면의 "건수")는 이번 수집에서 그 소스가 원본
+    사이트에서 몇 건을 긁어왔는지(병합/제외 반영 전)를 나타내는데, 중복 병합과
+    K-Startup 자금성 판정 제외 때문에 실제로 화면에 뜨는 건수와 달라질 수 있어
+    혼동을 준다. 이 함수는 notices 테이블(병합 이후 최종 상태)을 기준으로
+    exclude 판정된 공고를 제외하고 센다 — 비활성화된 소스(화면에서 아예
+    숨겨짐)는 호출부에서 0으로 덮어써야 한다."""
+    init_db()
+    with connect() as con:
+        excluded = {
+            r["notice_id"]
+            for r in con.execute("SELECT notice_id FROM notice_funding_classification WHERE verdict='exclude'")
+        }
+        counts: Dict[str, int] = {}
+        for r in con.execute("SELECT id, source FROM notices"):
+            if r["id"] in excluded:
+                continue
+            sid = canonical_source_id(r["source"])
+            counts[sid] = counts.get(sid, 0) + 1
+    return counts
+
+
 def toggle_favorite(user_id: str, notice_id: str) -> bool:
     init_db()
     with connect() as con:
