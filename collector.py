@@ -1402,24 +1402,56 @@ def _merge_title_key(title: str) -> str:
     return re.sub(r"[^\w가-힣]", "", t)
 
 
-def _merge_end_dates_conflict(a: Dict[str, Any], b: Dict[str, Any]) -> bool:
-    e1, e2 = a.get("end"), b.get("end")
-    if not e1 or not e2 or e1 == e2:
-        return False
+MERGE_DATE_TOLERANCE_DAYS = 1
+
+
+def _dates_close(d1: str, d2: str) -> bool:
+    return abs((date.fromisoformat(d1) - date.fromisoformat(d2)).days) <= MERGE_DATE_TOLERANCE_DAYS
+
+
+def _merge_dates_identical(a: Dict[str, Any], b: Dict[str, Any]) -> Optional[bool]:
+    """두 공고의 날짜가 "같다"고 볼 수 있는지 판단한다(하루 정도 차이는 허용 —
+    같은 공고를 여러 소스가 하루 어긋나게 표기하는 경우가 있어서다).
+
+    True/False 둘로만 답하지 않고 "판단 불가"(None)도 반환한다 — 필요한 날짜
+    정보가 없으면 "다르다"가 아니라 그냥 신호가 없는 것으로 취급해야, 퍼지
+    제목 유사도만으로 실제로는 다른 공고를 잘못 합치는 걸 막을 수 있다(날짜
+    불명 공고끼리는 우연히 둘 다 비어있다고 "같다"고 보면 안 된다).
+
+    - 둘 다 상시(rolling_confirmed) 공고면 시작일만 비교한다 — 상시 공고는
+      실제 의미 있는 마감일이 없어서(수시/소진 시 마감) end 비교가 의미 없다.
+    - 그 외에는 시작일·종료일이 둘 다 있어야 하고, 둘 다 하루 이내로 같아야
+      한다.
+    """
+    a_start, b_start = a.get("start"), b.get("start")
+    if a.get("rolling_confirmed") and b.get("rolling_confirmed"):
+        if not a_start or not b_start:
+            return None
+        try:
+            return _dates_close(a_start, b_start)
+        except ValueError:
+            return None
+    a_end, b_end = a.get("end"), b.get("end")
+    if not (a_start and a_end and b_start and b_end):
+        return None
     try:
-        d1 = date.fromisoformat(e1)
-        d2 = date.fromisoformat(e2)
+        return _dates_close(a_start, b_start) and _dates_close(a_end, b_end)
     except ValueError:
-        return False
-    return abs((d1 - d2).days) > 3
+        return None
 
 
 def merge_duplicate_notices(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """같은 공고가 여러 사이트(또는 같은 사이트의 흔들리는 URL)로 중복 수집된 경우
     하나의 공고로 합치고, 게재된 사이트 목록(sources)을 함께 붙인다.
 
-    제목 유사도가 0.8 이상이고 마감일이 크게 다르지 않을 때만 같은 공고로 본다.
-    (예: '대구콘텐츠코리아랩'과 '광주콘텐츠코리아랩'처럼 유사도가 낮은 건 합치지 않는다.)
+    같은 공고로 보는 기준 두 가지 중 하나:
+    1. 제목이 정규화 후 완전히 같다 — 이것만으로 충분하다(예: 신청 트랙만 다른
+       "(정착,창업형)"/"(일반형)" 같은 괄호 안 표현은 정규화 과정에서 제거됨).
+    2. 제목 유사도가 0.8 이상이고, 날짜도 같다(_merge_dates_identical 참고).
+       유사도만으로는 부족하다 — 기관명 등 짧은 차이가 전체 제목 길이에
+       묻혀서, 서로 다른 기관의 전혀 다른 공고(예: '안양대학교'/'영산대학교'
+       창업보육센터 입주기업 모집)가 문구 패턴만 비슷해 잘못 합쳐지는 걸
+       날짜 일치 요구로 막는다.
     """
     groups: List[List[Dict[str, Any]]] = []
     keys: List[str] = []
@@ -1429,12 +1461,16 @@ def merge_duplicate_notices(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]
         for gi, gkey in enumerate(keys):
             if not key or not gkey:
                 continue
+            if key == gkey:
+                groups[gi].append(it)
+                placed = True
+                break
             if abs(len(key) - len(gkey)) > max(len(key), len(gkey)) * 0.4:
                 continue
             ratio = difflib.SequenceMatcher(None, key, gkey).ratio()
             if ratio < MERGE_TITLE_SIM_THRESHOLD:
                 continue
-            if _merge_end_dates_conflict(it, groups[gi][0]):
+            if _merge_dates_identical(it, groups[gi][0]) is not True:
                 continue
             groups[gi].append(it)
             placed = True
