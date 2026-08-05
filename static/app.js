@@ -402,14 +402,24 @@ function renderAuthUI(){
   fillLlmPreference();
   const sourcesPanel = $('#adminSourcesPanel');
   const schedulerPanel = $('#adminSchedulerPanel');
+  const navAdminBtn = $('#navAdminBtn');
   if(currentUserState?.is_admin){
     sourcesPanel?.classList.remove('hidden');
     loadAllSources();
     schedulerPanel?.classList.remove('hidden');
     loadSchedulerConfig();
+    navAdminBtn?.classList.remove('hidden');
   } else {
     sourcesPanel?.classList.add('hidden');
     schedulerPanel?.classList.add('hidden');
+    navAdminBtn?.classList.add('hidden');
+    // 관리자 권한이 없는데 관리자 화면이 떠 있으면(예: 로그아웃/권한 변경) 목록으로 되돌린다.
+    if(navAdminBtn?.classList.contains('active')){
+      navAdminBtn.classList.remove('active');
+      $('#view-admin')?.classList.remove('active');
+      $('.nav[data-view="list"]')?.classList.add('active');
+      $('#view-list')?.classList.add('active');
+    }
   }
 }
 

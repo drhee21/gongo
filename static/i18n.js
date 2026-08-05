@@ -124,7 +124,7 @@ const TRANSLATIONS = {
     adminSubtitle: '수집 상태와 API 오류를 확인합니다.',
     sourceStatusTitle: '소스 상태',
 
-    schedulerTitle: '자동 수집 일정 (관리자)',
+    schedulerTitle: '자동 수집 일정',
     schedulerDesc: '서버가 계속 실행 중인 동안, 지정한 시간/주기에 맞춰 자동으로 공고를 수집합니다.',
     schedulerEnabledLabel: '자동 수집 사용',
     schedulerModeDaily: '매일 지정 시간에',
@@ -138,7 +138,7 @@ const TRANSLATIONS = {
     schedulerNextRun: '다음 예정: {v}',
     toastSchedulerSaved: '자동 수집 일정 저장 완료',
 
-    adminSourcesTitle: '소스 관리 (관리자)',
+    adminSourcesTitle: '소스 관리',
     adminSourcesDesc: '이름과 공고 목록 페이지 URL만 넣으면 별도 코드 작성 없이 AI가 자동으로 수집 방법을 찾아냅니다. 미리보기를 확인하고 확정해야 실제 수집에 반영됩니다. 기존 소스는 아래 목록에서 URL을 바로 재정의할 수 있고, 커스텀 소스는 이름/URL 수정과 활성화·삭제까지 가능합니다.',
     siteNamePlaceholder: '사이트 이름',
     siteUrlPlaceholder: '공고 목록 페이지 URL (https://...)',
@@ -388,7 +388,7 @@ const TRANSLATIONS = {
     adminSubtitle: 'Check collection status and API errors.',
     sourceStatusTitle: 'Source Status',
 
-    schedulerTitle: 'Automatic Collection Schedule (Admin)',
+    schedulerTitle: 'Automatic Collection Schedule',
     schedulerDesc: 'While the server keeps running, notices are collected automatically at the time/interval you set.',
     schedulerEnabledLabel: 'Enable Automatic Collection',
     schedulerModeDaily: 'Daily at a set time',
@@ -402,7 +402,7 @@ const TRANSLATIONS = {
     schedulerNextRun: 'Next scheduled: {v}',
     toastSchedulerSaved: 'Schedule saved',
 
-    adminSourcesTitle: 'Source Management (Admin)',
+    adminSourcesTitle: 'Source Management',
     adminSourcesDesc: "Just enter a name and the notice list page URL — AI figures out how to collect it automatically, no code needed. Review the preview and confirm before it takes effect. Built-in sources can have their URL overridden directly below; custom sources can also be renamed, re-pointed, enabled/disabled, and deleted.",
     siteNamePlaceholder: 'Site Name',
     siteUrlPlaceholder: 'Notice list page URL (https://...)',

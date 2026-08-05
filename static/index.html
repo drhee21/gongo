@@ -20,7 +20,7 @@
       <button class="nav" data-view="fav" data-i18n="navFav">관심 공고</button>
       <button class="nav" data-view="cal" data-i18n="navCal">캘린더</button>
       <button class="nav" data-view="company" data-i18n="navCompany">회사 정보</button>
-      <button class="nav" data-view="admin" data-i18n="navAdmin">관리자</button>
+      <button id="navAdminBtn" class="nav hidden" data-view="admin" data-i18n="navAdmin">관리자</button>
     </nav>
     <div class="sidebox lang-switch">
       <button type="button" class="lang-btn" data-lang-btn="ko" data-i18n="langKo">한국어</button>
@@ -215,7 +215,7 @@
         <div id="sourcesTable"></div>
       </div>
       <div class="panel hidden" id="adminSchedulerPanel">
-        <h2 data-i18n="schedulerTitle">자동 수집 일정 (관리자)</h2>
+        <h2 data-i18n="schedulerTitle">자동 수집 일정</h2>
         <p data-i18n="schedulerDesc">서버가 계속 실행 중인 동안, 지정한 시간/주기에 맞춰 자동으로 공고를 수집합니다.</p>
         <p class="meta" id="schedulerStatus"></p>
         <form id="schedulerForm" class="form-grid">
@@ -245,7 +245,7 @@
         </form>
       </div>
       <div class="panel hidden" id="adminSourcesPanel">
-        <h2 data-i18n="adminSourcesTitle">소스 관리 (관리자)</h2>
+        <h2 data-i18n="adminSourcesTitle">소스 관리</h2>
         <p data-i18n="adminSourcesDesc">이름과 공고 목록 페이지 URL만 넣으면 별도 코드 작성 없이 AI가 자동으로 수집 방법을 찾아냅니다. 미리보기를 확인하고 확정해야 실제 수집에 반영됩니다. 기존 소스는 아래 목록에서 URL을 바로 재정의할 수 있고, 커스텀 소스는 이름/URL 수정과 활성화·삭제까지 가능합니다.</p>
         <div id="customSourceEditBanner" class="hidden meta"></div>
         <div class="custom-source-add-row">
