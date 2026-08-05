@@ -24,6 +24,7 @@ import requests
 from bs4 import BeautifulSoup
 
 import auth
+import collector
 import database
 import llm
 
@@ -130,16 +131,14 @@ def classify_new_kstartup_notices(
     if not new_ids:
         return
 
-    profile = database.resolve_background_llm_profile(triggering_user_id)
-    if not profile:
-        return
-    model_id = profile["model_id"]
-    api_key = auth.decrypt_secret(profile["key_enc"])
-
     timeout = int(common.get("timeout_sec", 20))
     delay = float(common.get("request_delay_sec", 0.8))
 
+    # 상세 페이지는 여기서 한 번만 가져온다 — keep/exclude 판정용 텍스트와
+    # ai_match.py가 쓰는 elig(연차 상한/지역/분야)를 같은 요청에서 함께 뽑아 쓴다.
+    # elig는 LLM 없이도 계산되는 규칙 기반 값이라 LLM 키 여부와 무관하게 채운다.
     briefs: List[Dict[str, Any]] = []
+    elig_updates: Dict[str, Any] = {}
     for nid in new_ids:
         item = by_id[nid]
         url = item.get("url")
@@ -150,10 +149,26 @@ def classify_new_kstartup_notices(
         except Exception:
             continue
         briefs.append(_notice_brief(item, fields))
+        elig_updates[nid] = collector.elig_from_text(
+            item.get("title"),
+            fields.get("support_area"),
+            fields.get("age_tier"),
+            fields.get("eligibility_text"),
+            fields.get("benefit_text"),
+        )
         time.sleep(delay)
+
+    if elig_updates:
+        database.update_notice_elig(elig_updates)
 
     if not briefs:
         return
+
+    profile = database.resolve_background_llm_profile(triggering_user_id)
+    if not profile:
+        return
+    model_id = profile["model_id"]
+    api_key = auth.decrypt_secret(profile["key_enc"])
 
     results: Dict[str, Dict[str, str]] = {}
     for batch in _chunks(briefs, CHUNK_SIZE):
