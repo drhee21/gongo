@@ -1381,10 +1381,18 @@ def collect_biohub_direct(bcfg: Dict[str, Any], common: Dict[str, Any]) -> List[
 
 
 def deduplicate(items: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """같은 소스 안에서 페이지네이션이 겹쳐 똑같은 항목이 두 번 긁힌 경우만 걸러낸다.
+
+    url이 있으면 그것만으로 판단한다(같은 공고면 url도 같다) — 제목만 보고
+    정규화 문자열(공백/괄호 등 제거, 48자 절단)로 비교하면 "OO 모집 (지역)"과
+    "OO 모집(지역)"처럼 실제로는 다른 두 공고(K-Startup pbancSn이 다름)를 같은
+    항목으로 잘못 합쳐버릴 수 있다. url이 없는 경우(옛 게시판 콜렉터 등)에만
+    제목 정규화로 대체한다."""
     seen = set()
     out = []
     for a in items:
-        key = re.sub(r"[\s\[\](){}<>〔〕·,._-]", "", a.get("title", ""))[:48]
+        url = clean(a.get("url") or "")
+        key = url or re.sub(r"[\s\[\](){}<>〔〕·,._-]", "", a.get("title", ""))[:48]
         if not key or key in seen:
             continue
         seen.add(key)
