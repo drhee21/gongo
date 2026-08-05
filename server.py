@@ -512,7 +512,22 @@ class Handler(BaseHTTPRequestHandler):
                 if run is None:
                     self.send_json({"ok": False, "error": "지금 다른 수집이 진행 중입니다. 잠시 후 다시 시도해주세요."}, status=429)
                     return
-                self.send_json({"ok": True, "count": len(run.items), "sources": run.sources})
+                # len(run.items)는 이번 실행에서 활성 소스들이 병합 후 만들어낸 원본
+                # 건수라, K-Startup 자금성 판정 제외나 비활성 소스에 남아있는 옛 데이터를
+                # 고려하지 않는다 — "업데이트 완료: N건" 토스트에 그대로 쓰면 사용자가
+                # 실제 목록에 보이는 건수와 안 맞아 혼란스럽다. 화면에 실제로 뜨는 건수
+                # (표시 건수)를 대신 돌려준다.
+                displayed_counts = database.get_displayed_counts_by_source()
+                # get_disabled_source_ids()는 원본 id(biohub_direct/khidi_direct)를
+                # 돌려주는데 displayed_counts는 canonical id(biohub/khidi)로 집계되어
+                # 있으므로, 그대로 비교하면 안 걸러지고 새어 들어간다.
+                disabled_sources = {
+                    database.canonical_source_id(sid) for sid in collector.get_disabled_source_ids()
+                }
+                displayed_total = sum(
+                    n for sid, n in displayed_counts.items() if sid not in disabled_sources
+                )
+                self.send_json({"ok": True, "count": displayed_total, "sources": run.sources})
                 return
             if path == "/api/admin/source-overrides":
                 user = current_user(self)
