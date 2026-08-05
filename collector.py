@@ -1689,16 +1689,11 @@ def collect_all(write_db: bool = True, triggering_user_id: Optional[str] = None)
         # 아래 flag_source_anomalies() 이상 감지 시 recover_source_via_recipe()가
         # 이 소스도 복구 대상으로 볼 수 있게 board_list_urls에 등록해둔다.
         board_list_urls["kstartup"] = clean(kcfg.get("list_url") or KSTARTUP_DEFAULT_URL)
-    if kcfg.get("enabled", False):
+    kstartup_enabled = kcfg.get("enabled", False)
+    if kstartup_enabled:
         try:
             items = _run_with_retry(lambda: _collect_via_stored_recipe("kstartup", common, cap))
             run.record("kstartup", items, "정상", name=kcfg.get("name"), method="레시피")
-            try:
-                funding_classifier.classify_new_kstartup_notices(items, common, triggering_user_id)
-            except Exception:
-                # 판정 실패가 수집 자체를 실패로 만들면 안 된다 — 판정 전 공고는
-                # 기본적으로 화면에 계속 보이므로 조용히 다음 실행에서 재시도된다.
-                pass
         except Exception as e:
             run.record("kstartup", [], "오류", e, name=kcfg.get("name"))
     else:
@@ -1795,6 +1790,24 @@ def collect_all(write_db: bool = True, triggering_user_id: Optional[str] = None)
         database.upsert_notices(run.items, prune=not used_sample, extra_keep_ids=extra_keep_ids)
         database.record_source_history(run.sources)
         database.replace_source_status(run.sources)
+
+        # classify는 merge_duplicate_notices()가 확정한(그리고 방금 upsert된) 최종
+        # id를 써야 한다. merge_duplicate_notices()는 병합 여부와 무관하게 모든
+        # 공고의 id를 정규화된 제목 기반으로 다시 계산하므로(make_id 호출부 참고),
+        # 병합 *전* 스크래핑 시점의 원본 id를 그대로 쓰면 notices 테이블에 실제로
+        # 저장된 id와 어긋나 save_funding_classifications()가 전부 조용히 버린다
+        # (FK 존재 체크에 걸림). 그래서 반드시 run.items(merge 이후, upsert 이후)
+        # 에서 kstartup 유래 항목만 뽑아 써야 한다.
+        if kstartup_enabled:
+            kstartup_final_items = [
+                it for it in run.items
+                if any(s.get("id") == "kstartup" for s in (it.get("sources") or []))
+            ]
+            if kstartup_final_items:
+                try:
+                    funding_classifier.classify_new_kstartup_notices(kstartup_final_items, common, triggering_user_id)
+                except Exception:
+                    pass
     return run
 
 

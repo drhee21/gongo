@@ -342,6 +342,15 @@ def run_recipe(source_id: str, recipe: Dict[str, Any], common: Dict[str, Any]) -
             if not title:
                 continue
 
+            # 목록 페이지를 실제 마지막 페이지 너머로 요청하면 사이트에 따라
+            # 404/빈 페이지 대신 "등록된 데이터가 없습니다" 같은 안내 문구를
+            # 담은 플레이스홀더 항목을 selector가 그대로 매치해버리는 경우가
+            # 있다(K-Startup 확인됨). 이런 항목은 url이 비어 있는 게 특징이라
+            # url 필드가 레시피에 정의돼 있는데도 비어 있으면 실제 공고가
+            # 아니라고 보고 건너뛴다.
+            if "url" in list_field_map and not fields.get("url"):
+                continue
+
             if fields.get("url"):
                 # 목록에서 뽑은 url이 상대경로일 수 있다(예: href="/board/view?id=1") —
                 # detail_field_map이 없어도(상세 페이지를 안 가져오는 레시피여도) 최종
