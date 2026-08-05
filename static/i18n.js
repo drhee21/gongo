@@ -568,7 +568,12 @@ function countText(n) {
 function applyStaticTranslations() {
   document.documentElement.lang = currentLang;
   document.title = t('pageTitle');
-  document.querySelectorAll('[data-i18n]').forEach(el => { el.textContent = t(el.dataset.i18n); });
+  // 진행 중(예: "업데이트 중...")인 버튼은 data-i18n-busy에 그 상태의 번역 키를
+  // 담아둔다 — 언어를 전환해도 원래 라벨("업데이트")로 되돌아가지 않고 진행 중
+  // 라벨이 새 언어로 다시 번역되게 하기 위해서다 (data-i18n 자체를 덮어써버리면
+  // 완료 후 어떤 라벨로 되돌려야 할지 알 수 없어져서, 원래 키는 그대로 두고
+  // 별도 속성으로 진행 상태만 표시한다).
+  document.querySelectorAll('[data-i18n]').forEach(el => { el.textContent = t(el.dataset.i18nBusy || el.dataset.i18n); });
   document.querySelectorAll('[data-i18n-placeholder]').forEach(el => { el.placeholder = t(el.dataset.i18nPlaceholder); });
   document.querySelectorAll('[data-lang-btn]').forEach(btn => {
     btn.classList.toggle('active', btn.dataset.langBtn === currentLang);

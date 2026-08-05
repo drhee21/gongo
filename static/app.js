@@ -707,7 +707,7 @@ $('#btnDiscoverCustomSource')?.addEventListener('click', async ()=>{
 
   const btn = $('#btnDiscoverCustomSource');
   btn.disabled = true;
-  btn.dataset.originalText = btn.textContent;
+  btn.dataset.i18nBusy = 'btnAnalyzingRecipe';
   btn.textContent = t('btnAnalyzingRecipe');
   try{
     const body = {name, url};
@@ -720,7 +720,8 @@ $('#btnDiscoverCustomSource')?.addEventListener('click', async ()=>{
     toast(err.message, 'error');
   }finally{
     btn.disabled = false;
-    btn.textContent = btn.dataset.originalText || t('btnSave');
+    delete btn.dataset.i18nBusy;
+    btn.textContent = t('btnSave');
   }
 });
 
@@ -781,7 +782,7 @@ async function recollect(){
   const btns = $$('#btnCollect');
   btns.forEach(b=>{
     b.disabled = true;
-    b.dataset.originalText = b.textContent;
+    b.dataset.i18nBusy = 'btnUpdating';
     b.textContent = t('btnUpdating');
   });
   try{
@@ -793,7 +794,8 @@ async function recollect(){
   }finally{
     btns.forEach(b=>{
       b.disabled = false;
-      b.textContent = b.dataset.originalText || t('btnUpdate');
+      delete b.dataset.i18nBusy;
+      b.textContent = t('btnUpdate');
     });
   }
 }
@@ -861,7 +863,7 @@ $('#btnAiFit')?.addEventListener('click', async ()=>{
   const btn = $('#btnAiFit');
   if(btn){
     btn.disabled = true;
-    btn.dataset.originalText = btn.textContent;
+    btn.dataset.i18nBusy = 'btnAiAnalyzing';
     btn.textContent = t('btnAiAnalyzing');
   }
   try{
@@ -873,7 +875,8 @@ $('#btnAiFit')?.addEventListener('click', async ()=>{
   }finally{
     if(btn){
       btn.disabled = false;
-      btn.textContent = btn.dataset.originalText || t('btnRunAiFit');
+      delete btn.dataset.i18nBusy;
+      btn.textContent = t('btnRunAiFit');
     }
   }
 });
