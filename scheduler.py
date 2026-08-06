@@ -105,13 +105,15 @@ def next_run_estimate(cfg: Dict[str, Any], last_run_iso: Optional[str], now: dat
 
 
 def run_collection_locked(lock: threading.Lock, triggering_user_id: Optional[str] = None) -> Optional["collector.CollectRun"]:
-    """수동(/api/recollect)과 스케줄러가 공유하는 유일한 진입점 — collect_all()이 두
-    곳에서 동시에 실행되는 걸 막는다. 이미 다른 수집이 진행 중이면 None을 돌려준다.
+    """관리자가 직접 누르는 "지금 업데이트"(/api/recollect)와 스케줄러가 공유하는 유일한
+    진입점 — collect_all()이 두 곳에서 동시에 실행되는 걸 막는다. 이미 다른 수집이
+    진행 중이면 None을 돌려준다.
 
-    triggering_user_id는 사용자가 직접 "업데이트"를 눌러서 트리거한 경우에만
-    전달된다 — 그 경우 배경 LLM 작업(K-스타트업 판정, KHIDI 마감일 추출, 레시피
-    복구)이 그 사용자 본인의 활성 키를 쓴다. 스케줄러가 자동으로 돌릴 때는 None이라
-    관리자 계정 중 하나로 대체된다."""
+    triggering_user_id가 있으면 배경 LLM 작업(자금성 판정, KHIDI 마감일 추출, 레시피
+    복구)이 그 사용자 본인의 활성 키를 쓴다. 수동 실행이면 지금 로그인한 관리자,
+    스케줄러 자동 실행이면 일정을 마지막으로 저장한 관리자(scheduler_loop() 참고)다.
+    둘 다 없으면(예: 일정을 아직 아무도 저장한 적 없음) 관리자 계정 중 하나로
+    대체된다."""
     if not lock.acquire(blocking=False):
         return None
     try:
@@ -129,7 +131,11 @@ def scheduler_loop(shutdown_event: threading.Event, lock: threading.Lock) -> Non
             now = datetime.now()
             if not should_run_now(cfg, get_last_run(), now):
                 continue
-            run = run_collection_locked(lock)
+            # 이 일정을 마지막으로 저장한 관리자의 키를 쓴다(server.py의
+            # /api/admin/scheduler-config가 저장 시점에 updated_by를 함께 저장해둠) —
+            # 없으면(예: 아직 아무도 저장한 적 없는 기본값) None으로 떨어져
+            # run_collection_locked()가 관리자 계정 중 하나로 대체한다.
+            run = run_collection_locked(lock, triggering_user_id=cfg.get("updated_by"))
             if run is not None:
                 database.set_app_setting(LAST_RUN_KEY, now.isoformat(timespec="seconds"))
         except Exception:

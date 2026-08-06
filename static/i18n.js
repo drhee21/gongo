@@ -32,7 +32,7 @@ const TRANSLATIONS = {
 
     listTitle: '공고 목록',
     listSubtitle: 'K-스타트업 · 기업마당 · 서울바이오허브 · KHIDI · NRF · KDDF · 나라장터',
-    btnUpdate: '업데이트',
+    btnUpdate: '지금 업데이트',
     btnUpdating: '업데이트 중...',
     kpiTotal: '전체',
     kpiOpen: '접수중',
@@ -124,7 +124,7 @@ const TRANSLATIONS = {
     adminSubtitle: '수집 상태와 API 오류를 확인합니다.',
     sourceStatusTitle: '소스 상태',
 
-    schedulerTitle: '자동 수집 일정',
+    schedulerTitle: '수집 일정',
     schedulerDesc: '서버가 계속 실행 중인 동안, 지정한 시간/주기에 맞춰 자동으로 공고를 수집합니다.',
     schedulerEnabledLabel: '자동 수집 사용',
     schedulerModeDaily: '매일 지정 시간에',
@@ -296,7 +296,7 @@ const TRANSLATIONS = {
 
     listTitle: 'Notices',
     listSubtitle: 'K-Startup · Bizinfo · Seoul Bio Hub · KHIDI · NRF · KDDF · G2B',
-    btnUpdate: 'Update',
+    btnUpdate: 'Update Now',
     btnUpdating: 'Updating...',
     kpiTotal: 'Total',
     kpiOpen: 'Open',
@@ -388,7 +388,7 @@ const TRANSLATIONS = {
     adminSubtitle: 'Check collection status and API errors.',
     sourceStatusTitle: 'Source Status',
 
-    schedulerTitle: 'Automatic Collection Schedule',
+    schedulerTitle: 'Collection Schedule',
     schedulerDesc: 'While the server keeps running, notices are collected automatically at the time/interval you set.',
     schedulerEnabledLabel: 'Enable Automatic Collection',
     schedulerModeDaily: 'Daily at a set time',

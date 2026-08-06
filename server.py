@@ -498,8 +498,8 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if path == "/api/recollect":
                 user = current_user(self)
-                if not user:
-                    self.send_json({"ok": False, "error": "로그인이 필요합니다"}, status=401)
+                if not (user and user.get("is_admin")):
+                    self.send_json({"ok": False, "error": "관리자 권한이 필요합니다"}, status=403)
                     return
                 global _last_recollect_at
                 now = datetime.now()
@@ -589,6 +589,10 @@ class Handler(BaseHTTPRequestHandler):
                     "time": time_str,
                     "days": days,
                     "interval_hours": interval_hours,
+                    # 스케줄러가 자동 실행될 때 이 값을 triggering_user_id로 써서, 그 시점에
+                    # 활성이던 이 관리자의 키를 쓰게 한다(scheduler.py 참고) — 매번 "가장 최근에
+                    # 승격된 관리자"로 대체되는 대신, 일정을 실제로 설정한 사람의 키가 쓰인다.
+                    "updated_by": user["id"],
                 }
                 database.set_app_setting(scheduler.SETTING_KEY, cfg)
                 self.send_json({"ok": True, "config": cfg})

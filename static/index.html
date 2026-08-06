@@ -66,7 +66,6 @@
           <p data-i18n="listSubtitle">K-스타트업 · 기업마당 · 서울바이오허브 · KHIDI · NRF · KDDF · 나라장터</p>
         </div>
         <div class="actions">
-          <button id="btnCollect" class="primary" data-i18n="btnUpdate">업데이트</button>
           <a class="button" href="/api/export.csv">CSV</a>
         </div>
       </header>
@@ -215,9 +214,12 @@
         <div id="sourcesTable"></div>
       </div>
       <div class="panel hidden" id="adminSchedulerPanel">
-        <h2 data-i18n="schedulerTitle">자동 수집 일정</h2>
+        <h2 data-i18n="schedulerTitle">수집 일정</h2>
         <p data-i18n="schedulerDesc">서버가 계속 실행 중인 동안, 지정한 시간/주기에 맞춰 자동으로 공고를 수집합니다.</p>
         <p class="meta" id="schedulerStatus"></p>
+        <div class="form-actions scheduler-now-row">
+          <button id="btnCollect" class="primary" type="button" data-i18n="btnUpdate">지금 업데이트</button>
+        </div>
         <form id="schedulerForm" class="form-grid">
           <label class="checkbox wide"><input type="checkbox" name="enabled" id="schedulerEnabled" /> <span data-i18n="schedulerEnabledLabel">자동 수집 사용</span></label>
           <div class="wide scheduler-mode-row">
