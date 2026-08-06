@@ -1,14 +1,22 @@
 # -*- coding: utf-8 -*-
-"""K-Startup 공고가 실제로 '스타트업/초기기업 대상 자금·지원'인지 판정한다.
+"""레시피로 수집된 공고가 실제로 '스타트업/초기기업 대상 자금·지원'인지 판정한다.
 
 배경: 사장님이 "교육/설명회/세미나 같은 건 걸러내고 스타트업 대상 자금·지원 공고만
 보고 싶다"고 요청했고, 제목만 보고 규칙(키워드)으로 거르는 방식은 173건을 실제로
 하나씩 검토해보니 정확도가 부족하다는 게 확인됐다(예: 제목/카테고리 태그는
 "창업"스러워 보여도 실제 신청대상은 "설립 3년 이상"으로 오히려 초기 스타트업을
 배제하는 경우, 반대로 "중소기업" 일반 대상인데 연차 구간 드롭다운만 붙어있는 경우
-등). 그래서 K-Startup 상세 페이지가 실제로 공개하는 구조화 필드(지원분야/창업업력/
-신청대상/지원내용)를 가져와 그 실제 텍스트를 근거로 LLM이 판정하게 한다 — 제목만
+등). 그래서 상세 페이지가 실제로 공개하는 구조화 필드(지원분야/창업업력/신청대상/
+제외대상/지원내용)를 가져와 그 실제 텍스트를 근거로 LLM이 판정하게 한다 — 제목만
 보고 추측하지 않는다.
+
+이 필드들은 이 모듈이 직접 스크래핑하지 않는다 — recipe_engine.run_recipe()가 각
+소스의 저장된 레시피(classify_field_map)에 정의된 선택자로 수집 시점에 이미 뽑아서
+notice의 raw["classify"]에 실어 보낸다(사이트별 스크래핑 코드는 레시피 하나만 있고,
+발견은 discover_recipe_agentic()이 한 번만 하면 이후 모든 소스가 재사용한다 —
+소스마다 이 판정 로직을 위해 별도의 손으로 쓴 파서를 만들 필요가 없다). 그 필드가
+없는 소스/공고(레시피가 classify_field_map을 아직 못 찾았거나 null인 경우)는 제목만
+가지고 판정하게 된다.
 
 비용 관리: collect_all()이 매번 전체 공고를 다시 판정하지 않도록,
 database.get_unclassified_ids()로 아직 한 번도 판정되지 않은 새 공고만 골라
@@ -17,26 +25,13 @@ LLM을 호출한다(같은 공고는 평생 한 번만 판정됨 — ai_fit과 �
 from __future__ import annotations
 
 import json
-import time
 from typing import Any, Dict, List
 
-import requests
-from bs4 import BeautifulSoup
-
 import auth
-import collector
 import database
 import llm
 
 CHUNK_SIZE = 30
-
-KSTARTUP_DETAIL_SELECTORS = {
-    "support_area": 'p.tit:-soup-contains("지원분야") + p.txt',
-    "age_tier": 'p.tit:-soup-contains("창업업력") + p.txt',
-    "eligibility_text": 'p.tit:-soup-contains("신청대상") + p.txt',
-    "exclusion_text": 'p.tit:-soup-contains("제외대상") + p.txt',
-    "benefit_text": 'div.information_list:has(p.title:-soup-contains("지원내용")) ul.dot_list-wrap',
-}
 
 CLASSIFY_SCHEMA = {
     "type": "object",
@@ -60,9 +55,10 @@ CLASSIFY_SCHEMA = {
 }
 
 CLASSIFY_SYSTEM_PROMPT = (
-    "너는 K-Startup 공고가 '스타트업/초기기업이 신청할 수 있는 실제 자금·펀딩(현금성 지원)'인지\n"
-    "판정하는 어시스턴트다. 각 공고에는 제목과 함께 K-Startup 상세 페이지의 실제 필드\n"
-    "(지원분야/창업업력/신청대상/제외대상/지원내용)가 주어진다. 이 실제 텍스트를 근거로만 판단해라.\n"
+    "너는 정부지원사업 공고가 '스타트업/초기기업이 신청할 수 있는 실제 자금·펀딩(현금성 지원)'인지\n"
+    "판정하는 어시스턴트다. 각 공고에는 제목과 함께 상세 페이지의 실제 필드\n"
+    "(지원분야/창업업력/신청대상/제외대상/지원내용)가 주어진다(없는 소스는 null일 수 있다). 이\n"
+    "실제 텍스트를 근거로만 판단하고, 필드가 없어 판단 근거가 부족하면 exclude로 판정해라.\n"
     "\n"
     "가장 중요한 원칙: 이 목록은 '자금·펀딩' 목록이다. 이 공고가 '주는' 것의 핵심(primary offer)이\n"
     "구체적인 금액·조건이 명시된 현금성 지원이어야 keep이다. 자금이 아예 없거나, 자금이 있어도\n"
@@ -143,40 +139,29 @@ CLASSIFY_SYSTEM_PROMPT = (
 )
 
 
-def _fetch_kstartup_detail_fields(url: str, timeout: int) -> Dict[str, str]:
-    r = requests.get(url, timeout=timeout, headers={"User-Agent": "GongoMoa/3.0 (internal notice aggregator; contact: local)"})
-    r.raise_for_status()
-    if not r.encoding or r.encoding.lower() == "iso-8859-1":
-        r.encoding = r.apparent_encoding
-    soup = BeautifulSoup(r.text, "html.parser")
-    out: Dict[str, str] = {}
-    for key, selector in KSTARTUP_DETAIL_SELECTORS.items():
-        el = soup.select_one(selector)
-        out[key] = el.get_text(" ", strip=True) if el else ""
-    return out
+def _notice_brief(item: Dict[str, Any]) -> Dict[str, Any]:
+    import recipe_engine  # 지연 임포트: recipe_engine이 collector를, collector가 이 모듈을 임포트하므로 순환 방지
 
-
-def _notice_brief(item: Dict[str, Any], fields: Dict[str, str]) -> Dict[str, Any]:
-    return {
-        "id": item["id"],
-        "title": item.get("title"),
-        "support_area": fields.get("support_area"),
-        "age_tier": fields.get("age_tier"),
-        "eligibility_text": fields.get("eligibility_text"),
-        "exclusion_text": fields.get("exclusion_text"),
-        "benefit_text": fields.get("benefit_text"),
-    }
+    classify_fields = (item.get("raw") or {}).get("classify") or {}
+    brief = {"id": item["id"], "title": item.get("title")}
+    for key in recipe_engine.CLASSIFY_FIELD_KEYS:
+        brief[key] = classify_fields.get(key)
+    return brief
 
 
 def _chunks(items: List[Any], size: int) -> List[List[Any]]:
     return [items[i:i + size] for i in range(0, len(items), size)]
 
 
-def classify_new_kstartup_notices(
-    items: List[Dict[str, Any]], common: Dict[str, Any], triggering_user_id: str | None = None
+def classify_new_notices(
+    items: List[Dict[str, Any]], triggering_user_id: str | None = None
 ) -> None:
-    """`items`(방금 수집한 kstartup 공고 전체) 중 아직 판정되지 않은 것만 골라
-    상세 페이지를 가져오고 LLM으로 keep/exclude를 판정해 DB에 저장한다.
+    """`items`(방금 수집한, 특정 소스의 공고 전체) 중 아직 판정되지 않은 것만 골라
+    LLM으로 keep/exclude를 판정해 DB에 저장한다.
+
+    상세 페이지 스크래핑은 하지 않는다 — recipe_engine.run_recipe()가 수집
+    시점에 이미 classify_field_map으로 뽑아 각 항목의 raw["classify"]에 실어
+    보낸 값을 그대로 읽는다(elig도 마찬가지로 run_recipe()가 이미 계산해 저장함).
 
     LLM 키가 없으면 조용히 건너뛴다(판정 전 공고는 기본적으로 화면에 계속
     보이므로, 키가 없다고 수집이 실패하거나 공고가 숨겨지지 않는다). 이 함수는
@@ -187,38 +172,7 @@ def classify_new_kstartup_notices(
     if not new_ids:
         return
 
-    timeout = int(common.get("timeout_sec", 20))
-    delay = float(common.get("request_delay_sec", 0.8))
-
-    # 상세 페이지는 여기서 한 번만 가져온다 — keep/exclude 판정용 텍스트와
-    # ai_match.py가 쓰는 elig(연차 상한/지역/분야)를 같은 요청에서 함께 뽑아 쓴다.
-    # elig는 LLM 없이도 계산되는 규칙 기반 값이라 LLM 키 여부와 무관하게 채운다.
-    briefs: List[Dict[str, Any]] = []
-    elig_updates: Dict[str, Any] = {}
-    for nid in new_ids:
-        item = by_id[nid]
-        url = item.get("url")
-        if not url:
-            continue
-        try:
-            fields = _fetch_kstartup_detail_fields(url, timeout)
-        except Exception:
-            continue
-        briefs.append(_notice_brief(item, fields))
-        elig_updates[nid] = collector.elig_from_text(
-            item.get("title"),
-            fields.get("support_area"),
-            fields.get("age_tier"),
-            fields.get("eligibility_text"),
-            fields.get("benefit_text"),
-        )
-        time.sleep(delay)
-
-    if elig_updates:
-        database.update_notice_elig(elig_updates)
-
-    if not briefs:
-        return
+    briefs = [_notice_brief(by_id[nid]) for nid in new_ids]
 
     profile = database.resolve_background_llm_profile(triggering_user_id)
     if not profile:
@@ -233,7 +187,7 @@ def classify_new_kstartup_notices(
                 model_id,
                 api_key,
                 CLASSIFY_SYSTEM_PROMPT,
-                f"[K-Startup 공고 {len(batch)}건, JSON]\n" + json.dumps(batch, ensure_ascii=False),
+                f"[정부지원사업 공고 {len(batch)}건, JSON]\n" + json.dumps(batch, ensure_ascii=False),
                 CLASSIFY_SCHEMA,
                 max_tokens=8000,
             )

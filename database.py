@@ -924,30 +924,6 @@ def save_funding_classifications(results: Dict[str, Dict[str, str]], method: str
             )
 
 
-def update_notice_elig(updates: Dict[str, Optional[Dict[str, Any]]]) -> None:
-    """{notice_id: elig_dict_or_None} 형태로 elig_json을 갱신한다. funding_classifier가
-    K-Startup 상세 페이지를 이미 가져온 김에(별도 재요청 없이) 그 텍스트로 계산한
-    elig를 여기로 흘려보낸다. notices 테이블에 없는 id는 조용히 건너뛴다."""
-    if not updates:
-        return
-    init_db()
-    with connect() as con:
-        existing_ids = {
-            row["id"]
-            for row in con.execute(
-                f"SELECT id FROM notices WHERE id IN ({','.join('?' * len(updates))})",
-                list(updates.keys()),
-            ).fetchall()
-        }
-        for nid, elig in updates.items():
-            if nid not in existing_ids:
-                continue
-            con.execute(
-                "UPDATE notices SET elig_json = ? WHERE id = ?",
-                (json.dumps(elig, ensure_ascii=False) if elig is not None else None, nid),
-            )
-
-
 def get_excluded_notice_ids() -> Set[str]:
     """verdict='exclude'로 분류된 notice id 전체. 공고 목록 API가 이 id들을
     걸러내는 데 쓴다 — 아직 분류되지 않은 공고는 여기 포함되지 않으므로

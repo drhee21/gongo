@@ -87,10 +87,30 @@ RECIPE_SCHEMA = {
             "required": ["title", "url", "org", "start", "end"],
             "additionalProperties": False,
         },
+        "classify_field_map": {
+            "type": ["object", "null"],
+            "description": "자금성(keep/exclude) 판정과 신청자격 계산에 쓸 상세 페이지 필드. 이 "
+            "사이트의 상세 페이지가 지원분야/신청대상(연차)/신청대상/제외대상/지원내용에 해당하는 "
+            "내용을 구조화된 형태로 전혀 제공하지 않으면 null로 남겨라. 하나라도 그런 내용이 있으면 "
+            "5개 필드를 모두 채워라 — 사이트가 이 5개로 딱 나뉘어 있지 않아도 된다, 가장 가까운 "
+            "절(section)의 선택자를 재사용해도 된다(예: 신청대상과 제외대상이 같은 문단에 있으면 "
+            "둘 다 그 문단을 가리켜도 된다).",
+            "properties": {
+                "support_area": FIELD_SPEC,
+                "age_tier": FIELD_SPEC,
+                "eligibility_text": FIELD_SPEC,
+                "exclusion_text": FIELD_SPEC,
+                "benefit_text": FIELD_SPEC,
+            },
+            "required": ["support_area", "age_tier", "eligibility_text", "exclusion_text", "benefit_text"],
+            "additionalProperties": False,
+        },
     },
-    "required": ["fetch", "item_selector", "field_map"],
+    "required": ["fetch", "item_selector", "field_map", "classify_field_map"],
     "additionalProperties": False,
 }
+
+CLASSIFY_FIELD_KEYS = ("support_area", "age_tier", "eligibility_text", "exclusion_text", "benefit_text")
 
 def _content_for_prompt(source_id: str, sample_content: str) -> str:
     return f"[소스 ID: {source_id}]\n[페이지 원본]\n{sample_content}"
@@ -285,7 +305,12 @@ def run_recipe(source_id: str, recipe: Dict[str, Any], common: Dict[str, Any]) -
     timeout = int(common.get("timeout_sec", 20))
     delay = float(common.get("request_delay_sec", 0.8))
     max_items = collector.resolve_max_items(common.get("max_items_per_source", 60))
-    field_map = recipe["field_map"]
+    # classify_field_map(자금성 판정용 상세 필드)이 있으면 field_map에 합쳐서 처리한다 —
+    # 그러면 아래 list/detail 분리와 상세 페이지 요청 로직이 수정 없이 그대로 이 필드들도
+    # 함께 채운다. 상세 페이지를 이미 다른 이유로(예: 마감일) 가져와야 하는 항목이면 같은
+    # 요청 한 번에 자금성 필드까지 같이 뽑는다 — 별도로 다시 요청하지 않는다.
+    field_map = dict(recipe["field_map"])
+    field_map.update(recipe.get("classify_field_map") or {})
     item_selector = recipe["item_selector"]
 
     list_field_map = {k: v for k, v in field_map.items() if v.get("source") != "detail"}
@@ -375,6 +400,11 @@ def run_recipe(source_id: str, recipe: Dict[str, Any], common: Dict[str, Any]) -
 
             start = collector.parse_date(fields.get("start"))
             end = collector.parse_date(fields.get("end"))
+            classify_fields = {k: fields.get(k) for k in CLASSIFY_FIELD_KEYS if fields.get(k)}
+            elig = collector.elig_from_text(title, *classify_fields.values()) if classify_fields else None
+            raw: Dict[str, Any] = {"collector": "recipe_engine", "source_id": source_id}
+            if classify_fields:
+                raw["classify"] = classify_fields
             item = collector.normalize(
                 source_id,
                 title,
@@ -383,7 +413,8 @@ def run_recipe(source_id: str, recipe: Dict[str, Any], common: Dict[str, Any]) -
                 start,
                 end,
                 fields.get("url"),
-                raw={"collector": "recipe_engine", "source_id": source_id},
+                elig=elig,
+                raw=raw,
             )
             collector.mark_dates_unknown_if_needed(item, title, start_was_known=bool(start))
             out.append(item)
@@ -497,6 +528,15 @@ AGENTIC_DISCOVER_SYSTEM_PROMPT = (
     "마라 — title은 공고를 유일하게 식별할 수 있어야 한다(같은 사업을 재공고/차수만 다르게 "
     "여러 번 올리는 경우가 흔하고, 그 구분 표시가 사라지면 서로 다른 공고가 같은 제목으로 "
     "보여 하나로 오인될 수 있다).\n"
+    "- classify_field_map: 이 공고가 실제로 스타트업/초기기업 대상 '자금·지원'인지(교육/설명회/"
+    "공간 제공과 구분해서) 판정하고 신청자격(연차·지역·분야)을 계산하는 데 쓸 5개 필드다 — "
+    "support_area(지원분야), age_tier(신청 가능 창업업력/연차), eligibility_text(신청대상), "
+    "exclusion_text(제외대상), benefit_text(지원내용/지원금액). 대표 상세 페이지 하나를 "
+    "fetch_url로 열어서 이 개념들에 해당하는 절이 있는지 확인해라. 하나라도 있으면 5개 필드를 "
+    "모두 채워라(정확히 5개 절로 나뉘어 있지 않아도 된다 — 가장 가까운 절의 선택자를 여러 필드에 "
+    "재사용해도 된다, 예: 신청대상과 제외대상이 한 문단에 같이 있으면 둘 다 그 문단을 가리켜도 "
+    "된다). 이런 구조화된 정보를 상세 페이지가 전혀 제공하지 않으면(예: 자유 서술형 공고문 "
+    "이미지만 있는 경우) classify_field_map 전체를 null로 남겨라 — 억지로 채우지 마라.\n"
     "조사가 끝나면 submit_recipe 도구를 호출해서 최종 레시피를 제출해라."
 )
 

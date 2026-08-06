@@ -1655,6 +1655,11 @@ def collect_all(write_db: bool = True, triggering_user_id: Optional[str] = None)
     common = cfg.get("common", {})
     cap = resolve_max_items(common.get("max_items_per_source", 60))
     board_list_urls: Dict[str, str] = {}
+    # 레시피 경로(_collect_via_stored_recipe/recipe_engine.run_recipe())로 수집된 소스 id들 —
+    # 자금성 판정(funding_classifier)은 이 소스들에만 시도한다. 손으로 쓴 파서를 쓰는 소스는
+    # classify_field_map을 채울 방법이 없어 대상에서 자연히 빠진다(수동 on/off 스위치가 아니라
+    # 레시피가 그 필드를 실제로 채웠는지에 따라 결정됨).
+    recipe_source_ids: List[str] = []
 
     # Bizinfo and routed institutional notices.
     bcfg = _apply_source_override(cfg.get("bizinfo", {}), "bizinfo", overrides)
@@ -1694,6 +1699,7 @@ def collect_all(write_db: bool = True, triggering_user_id: Optional[str] = None)
         try:
             items = _run_with_retry(lambda: _collect_via_stored_recipe("kstartup", common, cap))
             run.record("kstartup", items, "정상", name=kcfg.get("name"), method="레시피")
+            recipe_source_ids.append("kstartup")
         except Exception as e:
             run.record("kstartup", [], "오류", e, name=kcfg.get("name"))
     else:
@@ -1713,12 +1719,15 @@ def collect_all(write_db: bool = True, triggering_user_id: Optional[str] = None)
             if sid == "biohub_direct":
                 items = _run_with_retry(lambda: _collect_via_stored_recipe(sid, common, cap))
                 run.record(sid, items, "정상", name=board_cfg.get("name") or "서울바이오허브(직접)", method="레시피")
+                recipe_source_ids.append(sid)
             elif sid == "nrf":
                 items = _run_with_retry(lambda: _collect_via_stored_recipe(sid, common, cap))
                 run.record(sid, items, "정상", name=board_cfg.get("name") or "한국연구재단", method="레시피")
+                recipe_source_ids.append(sid)
             elif sid == "kddf":
                 items = _run_with_retry(lambda: _collect_via_stored_recipe(sid, common, cap))
                 run.record(sid, items, "정상", name=board_cfg.get("name") or "국가신약개발사업단", method="레시피")
+                recipe_source_ids.append(sid)
             elif sid == "khidi_direct":
                 items = _run_with_retry(lambda: collect_khidi_direct(board_cfg, common, triggering_user_id))[:cap]
                 run.record(sid, items, "정상", name=board_cfg.get("name") or "보건산업진흥원/KHIDI", method="전용 파서(API)")
@@ -1746,6 +1755,7 @@ def collect_all(write_db: bool = True, triggering_user_id: Optional[str] = None)
         try:
             items = _run_with_retry(lambda: recipe_engine.run_recipe(sid, stored["recipe"], common))[:cap]
             run.record(sid, items, "정상", name=cs["name"], method="레시피")
+            recipe_source_ids.append(sid)
         except PermissionError as e:
             run.record(sid, [], "차단(robots)", e, name=cs["name"], method="레시피")
         except Exception as e:
@@ -1776,6 +1786,8 @@ def collect_all(write_db: bool = True, triggering_user_id: Optional[str] = None)
             entry["anomaly"] = False
             entry["anomaly_note"] = f"기존 수집이 실패해 레시피 기반으로 자동 복구되었습니다 ({len(recovered)}건)."
             recovered_any = True
+            if sid not in recipe_source_ids:
+                recipe_source_ids.append(sid)
         if recovered_any:
             run.items = merge_duplicate_notices(run.items)
 
@@ -1797,17 +1809,28 @@ def collect_all(write_db: bool = True, triggering_user_id: Optional[str] = None)
         # 병합 *전* 스크래핑 시점의 원본 id를 그대로 쓰면 notices 테이블에 실제로
         # 저장된 id와 어긋나 save_funding_classifications()가 전부 조용히 버린다
         # (FK 존재 체크에 걸림). 그래서 반드시 run.items(merge 이후, upsert 이후)
-        # 에서 kstartup 유래 항목만 뽑아 써야 한다.
-        if kstartup_enabled:
-            kstartup_final_items = [
+        # 에서 해당 소스 유래 항목만 뽑아 써야 한다.
+        #
+        # 레시피로 수집된 모든 소스에 대해 시도한다 — 소스별 on/off 스위치가 아니라, 그
+        # 소스의 저장된 레시피가 classify_field_map을 실제로 찾아뒀는지에 따라 자연히
+        # 갈린다. 아직 못 찾은 소스(레시피가 이 필드 없이 예전에 발견됐거나, 사이트에
+        # 애초에 구조화된 필드가 없어 discover가 null로 남긴 경우)는 제목만으로 판정하면
+        # 근거 부족으로 거의 다 exclude되어 그 소스 공고가 화면에서 대량으로 사라지는
+        # 부작용이 생기므로, classify_field_map이 없는 소스는 여기서 아예 건너뛴다.
+        for sid in recipe_source_ids:
+            stored_recipe = database.get_source_recipe(sid)
+            if not stored_recipe or not (stored_recipe["recipe"].get("classify_field_map")):
+                continue
+            final_items = [
                 it for it in run.items
-                if any(s.get("id") == "kstartup" for s in (it.get("sources") or []))
+                if any(s.get("id") == sid for s in (it.get("sources") or []))
             ]
-            if kstartup_final_items:
-                try:
-                    funding_classifier.classify_new_kstartup_notices(kstartup_final_items, common, triggering_user_id)
-                except Exception:
-                    pass
+            if not final_items:
+                continue
+            try:
+                funding_classifier.classify_new_notices(final_items, triggering_user_id)
+            except Exception:
+                pass
     return run
 
 
