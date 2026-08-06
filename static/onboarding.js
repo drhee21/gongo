@@ -35,6 +35,10 @@ function startOnboardingTour(){
 function buildOnboardingDom(){
   if($('#onboardTooltip')) return;
 
+  // html에도 같은 클래스를 줘서 페이지 스크롤 자체를 막는다 — 스크롤이 되면 스포트라이트가
+  // 짚고 있는 실제 요소는 화면에서 움직이는데 스포트라이트 박스는 그 자리에 그대로 남아
+  // 서로 어긋나 보인다(스포트라이트는 단계가 바뀔 때/리사이즈될 때만 다시 계산됨).
+  document.documentElement.classList.add('onboard-lock');
   document.body.classList.add('onboard-lock');
 
   const spot = document.createElement('div');
@@ -71,6 +75,13 @@ function buildOnboardingDom(){
   window.addEventListener('resize', ()=>{
     if(onboardActive) positionOnboardingSpotlight(currentOnboardSpotlightTarget());
   });
+
+  // CSS의 overflow:hidden만으로는 스크롤을 못 막는 경우가 있어(예: 코드로 직접
+  // scrollTo를 호출하는 경로), 휠/터치 스크롤 자체를 여기서도 막는다 — 스크롤되면
+  // 짚고 있는 요소는 화면에서 움직이는데 스포트라이트 박스는 그대로 남아 어긋나 보인다.
+  const blockScroll = (e) => { if(onboardActive) e.preventDefault(); };
+  window.addEventListener('wheel', blockScroll, {passive: false});
+  window.addEventListener('touchmove', blockScroll, {passive: false});
 
   // 언어 버튼을 누르면: 아직 언어 선택 단계면 바로 실제 투어를 시작하고,
   // 이미 투어 중이면(다른 단계에서 언어를 바꾼 경우) 현재 단계 문구만 새 언어로 다시 그린다.
@@ -152,6 +163,7 @@ function positionOnboardingSpotlight(step){
 
 async function endOnboardingTour(){
   onboardActive = false;
+  document.documentElement.classList.remove('onboard-lock');
   document.body.classList.remove('onboard-lock');
   $('#onboardSpotlight')?.remove();
   $('#onboardTooltip')?.remove();

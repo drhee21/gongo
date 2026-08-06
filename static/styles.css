@@ -173,6 +173,8 @@ pre{white-space:pre-wrap;background:var(--panel2);border:1px solid var(--line);b
 
 body.onboard-lock .sidebar,body.onboard-lock main,body.onboard-lock .modal-overlay{pointer-events:none}
 body.onboard-lock .sidebar .lang-switch{pointer-events:auto}
+html.onboard-lock,html.onboard-lock body{overflow:hidden}
+html.onboard-lock .sidebar{overflow-y:hidden}
 .onboard-spotlight{position:fixed;z-index:1100;border-radius:12px;box-shadow:0 0 0 9999px rgba(15,23,42,.65);pointer-events:none;transition:left .25s ease,top .25s ease,width .25s ease,height .25s ease}
 .onboard-tooltip{position:fixed;z-index:1101;width:min(340px,calc(100vw - 32px));background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:20px;box-shadow:0 16px 40px rgba(16,24,40,.28);transition:left .25s ease,top .25s ease}
 .onboard-step-count{font-size:12px;color:var(--muted);margin-bottom:6px;font-weight:600;letter-spacing:.02em}
