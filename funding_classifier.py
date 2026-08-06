@@ -6,17 +6,20 @@
 하나씩 검토해보니 정확도가 부족하다는 게 확인됐다(예: 제목/카테고리 태그는
 "창업"스러워 보여도 실제 신청대상은 "설립 3년 이상"으로 오히려 초기 스타트업을
 배제하는 경우, 반대로 "중소기업" 일반 대상인데 연차 구간 드롭다운만 붙어있는 경우
-등). 그래서 상세 페이지가 실제로 공개하는 구조화 필드(지원분야/창업업력/신청대상/
-제외대상/지원내용)를 가져와 그 실제 텍스트를 근거로 LLM이 판정하게 한다 — 제목만
-보고 추측하지 않는다.
+등). 그래서 상세 페이지 본문 전체(정리된 텍스트)를 가져와 그 실제 텍스트를 근거로 LLM이
+판정하게 한다 — 제목만 보고 추측하지 않는다.
 
-이 필드들은 이 모듈이 직접 스크래핑하지 않는다 — recipe_engine.run_recipe()가 각
-소스의 저장된 레시피(classify_field_map)에 정의된 선택자로 수집 시점에 이미 뽑아서
-notice의 raw["classify"]에 실어 보낸다(사이트별 스크래핑 코드는 레시피 하나만 있고,
-발견은 discover_recipe_agentic()이 한 번만 하면 이후 모든 소스가 재사용한다 —
-소스마다 이 판정 로직을 위해 별도의 손으로 쓴 파서를 만들 필요가 없다). 그 필드가
-없는 소스/공고(레시피가 classify_field_map을 아직 못 찾았거나 null인 경우)는 제목만
-가지고 판정하게 된다.
+이 텍스트는 이 모듈이 직접 스크래핑하지 않는다 — recipe_engine.run_recipe()가 url이
+있는 모든 항목에 대해 예외 없이(소스별 on/off 없이) 수집 시점에 상세 페이지를 가져와
+notice의 raw["classify_text"]에 실어 보낸다(사이트별 스크래핑 코드는 레시피 하나만
+있고, 발견은 discover_recipe_agentic()이 한 번만 하면 이후 모든 소스가 재사용한다 —
+소스마다 이 판정 로직을 위해 별도의 손으로 쓴 파서나 선택자를 만들 필요가 없다. 특정
+절을 짚어내는 선택자 대신 페이지 전체 텍스트를 그대로 주는 이유는, 사이트마다
+지원분야/신청대상/제외대상/지원내용이 어디에 어떻게 나뉘어 있는지가 다 달라서 하나의
+선택자로 안정적으로 짚어내기 어렵고, 그 라벨 자체가 보통 본문에 그대로 남아 있어
+텍스트만으로도 LLM이 문맥으로 충분히 읽어낼 수 있기 때문이다). 상세 페이지 요청이
+실패한 극소수 공고만 텍스트 없이 제목만 가지고 판정하게 된다(레시피 흐름 자체가
+내재적으로 하는 동작이라 손으로 쓴 파서를 쓰는 소스에는 애초에 해당하지 않는다).
 
 비용 관리: collect_all()이 매번 전체 공고를 다시 판정하지 않도록,
 database.get_unclassified_ids()로 아직 한 번도 판정되지 않은 새 공고만 골라
@@ -56,9 +59,10 @@ CLASSIFY_SCHEMA = {
 
 CLASSIFY_SYSTEM_PROMPT = (
     "너는 정부지원사업 공고가 '스타트업/초기기업이 신청할 수 있는 실제 자금·펀딩(현금성 지원)'인지\n"
-    "판정하는 어시스턴트다. 각 공고에는 제목과 함께 상세 페이지의 실제 필드\n"
-    "(지원분야/창업업력/신청대상/제외대상/지원내용)가 주어진다(없는 소스는 null일 수 있다). 이\n"
-    "실제 텍스트를 근거로만 판단하고, 필드가 없어 판단 근거가 부족하면 exclude로 판정해라.\n"
+    "판정하는 어시스턴트다. 각 공고에는 제목과 함께 상세 페이지 본문 전체(정리된 원문 텍스트,\n"
+    "content)가 주어진다(없는 소스는 null일 수 있다). 지원분야/창업업력/신청대상/제외대상/지원내용에\n"
+    "해당하는 내용을 본문 안에서 직접 찾아 그 실제 텍스트를 근거로만 판단하고, content가 없거나\n"
+    "판단 근거가 부족하면 exclude로 판정해라.\n"
     "\n"
     "가장 중요한 원칙: 이 목록은 '자금·펀딩' 목록이다. 이 공고가 '주는' 것의 핵심(primary offer)이\n"
     "구체적인 금액·조건이 명시된 현금성 지원이어야 keep이다. 자금이 아예 없거나, 자금이 있어도\n"
@@ -140,13 +144,11 @@ CLASSIFY_SYSTEM_PROMPT = (
 
 
 def _notice_brief(item: Dict[str, Any]) -> Dict[str, Any]:
-    import recipe_engine  # 지연 임포트: recipe_engine이 collector를, collector가 이 모듈을 임포트하므로 순환 방지
-
-    classify_fields = (item.get("raw") or {}).get("classify") or {}
-    brief = {"id": item["id"], "title": item.get("title")}
-    for key in recipe_engine.CLASSIFY_FIELD_KEYS:
-        brief[key] = classify_fields.get(key)
-    return brief
+    return {
+        "id": item["id"],
+        "title": item.get("title"),
+        "content": (item.get("raw") or {}).get("classify_text"),
+    }
 
 
 def _chunks(items: List[Any], size: int) -> List[List[Any]]:
@@ -160,8 +162,8 @@ def classify_new_notices(
     LLM으로 keep/exclude를 판정해 DB에 저장한다.
 
     상세 페이지 스크래핑은 하지 않는다 — recipe_engine.run_recipe()가 수집
-    시점에 이미 classify_field_map으로 뽑아 각 항목의 raw["classify"]에 실어
-    보낸 값을 그대로 읽는다(elig도 마찬가지로 run_recipe()가 이미 계산해 저장함).
+    시점에 이미 각 항목의 raw["classify_text"]에 실어 보낸 텍스트를 그대로 읽는다
+    (elig도 마찬가지로 run_recipe()가 이미 계산해 저장함).
 
     LLM 키가 없으면 조용히 건너뛴다(판정 전 공고는 기본적으로 화면에 계속
     보이므로, 키가 없다고 수집이 실패하거나 공고가 숨겨지지 않는다). 이 함수는

@@ -87,30 +87,13 @@ RECIPE_SCHEMA = {
             "required": ["title", "url", "org", "start", "end"],
             "additionalProperties": False,
         },
-        "classify_field_map": {
-            "type": ["object", "null"],
-            "description": "자금성(keep/exclude) 판정과 신청자격 계산에 쓸 상세 페이지 필드. 이 "
-            "사이트의 상세 페이지가 지원분야/신청대상(연차)/신청대상/제외대상/지원내용에 해당하는 "
-            "내용을 구조화된 형태로 전혀 제공하지 않으면 null로 남겨라. 하나라도 그런 내용이 있으면 "
-            "5개 필드를 모두 채워라 — 사이트가 이 5개로 딱 나뉘어 있지 않아도 된다, 가장 가까운 "
-            "절(section)의 선택자를 재사용해도 된다(예: 신청대상과 제외대상이 같은 문단에 있으면 "
-            "둘 다 그 문단을 가리켜도 된다).",
-            "properties": {
-                "support_area": FIELD_SPEC,
-                "age_tier": FIELD_SPEC,
-                "eligibility_text": FIELD_SPEC,
-                "exclusion_text": FIELD_SPEC,
-                "benefit_text": FIELD_SPEC,
-            },
-            "required": ["support_area", "age_tier", "eligibility_text", "exclusion_text", "benefit_text"],
-            "additionalProperties": False,
-        },
     },
-    "required": ["fetch", "item_selector", "field_map", "classify_field_map"],
+    "required": ["fetch", "item_selector", "field_map"],
     "additionalProperties": False,
 }
 
-CLASSIFY_FIELD_KEYS = ("support_area", "age_tier", "eligibility_text", "exclusion_text", "benefit_text")
+CLASSIFY_TEXT_MAX_CHARS = 6000
+
 
 def _content_for_prompt(source_id: str, sample_content: str) -> str:
     return f"[소스 ID: {source_id}]\n[페이지 원본]\n{sample_content}"
@@ -125,6 +108,23 @@ def _strip_boilerplate_html(html_text: str) -> str:
         comment.extract()
     body = soup.find("body") or soup
     return collector.clean(body.decode())
+
+
+def _classify_text_from_doc(fmt: str, doc: Any) -> Optional[str]:
+    """상세 페이지 문서에서 자금성 판정용 순수 텍스트를 뽑는다. 특정 절(section)을 짚어내는
+    선택자 없이 페이지 전체 텍스트를 쓴다 — 어떤 라벨이 어디 있는지는 판정하는 LLM이 문맥으로
+    알아서 읽는다(신청대상/지원분야 등 라벨 자체가 보통 본문에 그대로 남아 있으므로 텍스트로도
+    충분하다). html이 아니면(json/xml) 문서를 그대로 문자열화해서 쓴다."""
+    if fmt == "html":
+        soup = BeautifulSoup(str(doc), "html.parser") if not isinstance(doc, BeautifulSoup) else doc
+        for tag in soup(["script", "style", "head", "nav", "footer", "header", "noscript", "svg", "img", "video"]):
+            tag.decompose()
+        text = collector.clean(soup.get_text("\n", strip=True))
+    elif fmt == "json":
+        text = collector.clean(json.dumps(doc, ensure_ascii=False))
+    else:
+        text = collector.clean(ET.tostring(doc, encoding="unicode", method="text"))
+    return text[:CLASSIFY_TEXT_MAX_CHARS] if text else None
 
 
 def _apply_field(value: Optional[str], spec: Dict[str, Any]) -> Optional[str]:
@@ -299,18 +299,18 @@ def run_recipe(source_id: str, recipe: Dict[str, Any], common: Dict[str, Any]) -
     상세 페이지를 항목마다 한 번씩 추가로 가져와서 그 필드들을 채운다(목록에 없는 정보,
     예: 실제 마감일이 상세 페이지에만 있는 경우). 이 상세 페이지 요청은 구조를 다시
     LLM에게 물어보는 게 아니라, 발견 단계에서 이미 확인된 선택자를 그대로 재사용하는
-    것이므로 여전히 LLM 호출이 없다 — 다만 항목 수만큼 HTTP 요청이 늘어난다."""
+    것이므로 여전히 LLM 호출이 없다 — 다만 항목 수만큼 HTTP 요청이 늘어난다.
+
+    상세 페이지는 field_map에 detail 필드가 하나도 없어도, url이 있는 항목이면 항상
+    한 번 가져온다 — 자금성 판정(funding_classifier)이 쓰는 순수 텍스트(raw["classify_text"])를
+    채우기 위해서다. 이건 소스별로 켜고 끄는 옵션이 아니다 — 판정 자체가 이 흐름에
+    내재된 동작이라, 레시피로 수집되는 모든 소스가 예외 없이 동일하게 겪는다."""
     fetch = recipe["fetch"]
     fmt = fetch.get("format", "html")
     timeout = int(common.get("timeout_sec", 20))
     delay = float(common.get("request_delay_sec", 0.8))
     max_items = collector.resolve_max_items(common.get("max_items_per_source", 60))
-    # classify_field_map(자금성 판정용 상세 필드)이 있으면 field_map에 합쳐서 처리한다 —
-    # 그러면 아래 list/detail 분리와 상세 페이지 요청 로직이 수정 없이 그대로 이 필드들도
-    # 함께 채운다. 상세 페이지를 이미 다른 이유로(예: 마감일) 가져와야 하는 항목이면 같은
-    # 요청 한 번에 자금성 필드까지 같이 뽑는다 — 별도로 다시 요청하지 않는다.
     field_map = dict(recipe["field_map"])
-    field_map.update(recipe.get("classify_field_map") or {})
     item_selector = recipe["item_selector"]
 
     list_field_map = {k: v for k, v in field_map.items() if v.get("source") != "detail"}
@@ -382,7 +382,8 @@ def run_recipe(source_id: str, recipe: Dict[str, Any], common: Dict[str, Any]) -
                 # 저장되는 url은 항상 절대경로여야 링크가 실제로 동작한다.
                 fields["url"] = urljoin(fetch["url"], fields["url"])
 
-            if detail_field_map and fields.get("url"):
+            classify_text: Optional[str] = None
+            if fields.get("url"):
                 detail_url = fields["url"]
                 if not detail_robots_checked:
                     detail_robots_checked = True
@@ -392,6 +393,7 @@ def run_recipe(source_id: str, recipe: Dict[str, Any], common: Dict[str, Any]) -
                     detail_doc = _parse_doc(fmt, detail_url, timeout)
                     for k, spec in detail_field_map.items():
                         fields[k] = _extract_field(fmt, detail_doc, spec)
+                    classify_text = _classify_text_from_doc(fmt, detail_doc)
                     time.sleep(delay)
                 except Exception:
                     # 상세 페이지 하나가 깨져도 목록 정보만으로 항목 자체는 살린다 —
@@ -400,11 +402,10 @@ def run_recipe(source_id: str, recipe: Dict[str, Any], common: Dict[str, Any]) -
 
             start = collector.parse_date(fields.get("start"))
             end = collector.parse_date(fields.get("end"))
-            classify_fields = {k: fields.get(k) for k in CLASSIFY_FIELD_KEYS if fields.get(k)}
-            elig = collector.elig_from_text(title, *classify_fields.values()) if classify_fields else None
+            elig = collector.elig_from_text(title, classify_text) if classify_text else None
             raw: Dict[str, Any] = {"collector": "recipe_engine", "source_id": source_id}
-            if classify_fields:
-                raw["classify"] = classify_fields
+            if classify_text:
+                raw["classify_text"] = classify_text
             item = collector.normalize(
                 source_id,
                 title,
@@ -528,15 +529,6 @@ AGENTIC_DISCOVER_SYSTEM_PROMPT = (
     "마라 — title은 공고를 유일하게 식별할 수 있어야 한다(같은 사업을 재공고/차수만 다르게 "
     "여러 번 올리는 경우가 흔하고, 그 구분 표시가 사라지면 서로 다른 공고가 같은 제목으로 "
     "보여 하나로 오인될 수 있다).\n"
-    "- classify_field_map: 이 공고가 실제로 스타트업/초기기업 대상 '자금·지원'인지(교육/설명회/"
-    "공간 제공과 구분해서) 판정하고 신청자격(연차·지역·분야)을 계산하는 데 쓸 5개 필드다 — "
-    "support_area(지원분야), age_tier(신청 가능 창업업력/연차), eligibility_text(신청대상), "
-    "exclusion_text(제외대상), benefit_text(지원내용/지원금액). 대표 상세 페이지 하나를 "
-    "fetch_url로 열어서 이 개념들에 해당하는 절이 있는지 확인해라. 하나라도 있으면 5개 필드를 "
-    "모두 채워라(정확히 5개 절로 나뉘어 있지 않아도 된다 — 가장 가까운 절의 선택자를 여러 필드에 "
-    "재사용해도 된다, 예: 신청대상과 제외대상이 한 문단에 같이 있으면 둘 다 그 문단을 가리켜도 "
-    "된다). 이런 구조화된 정보를 상세 페이지가 전혀 제공하지 않으면(예: 자유 서술형 공고문 "
-    "이미지만 있는 경우) classify_field_map 전체를 null로 남겨라 — 억지로 채우지 마라.\n"
     "조사가 끝나면 submit_recipe 도구를 호출해서 최종 레시피를 제출해라."
 )
 
