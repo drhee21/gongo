@@ -117,6 +117,8 @@ const TRANSLATIONS = {
     onboard3Body: 'AI 맞춤 분석을 실행하려면 사용할 모델의 API 키가 필요합니다. 위에서 모델을 고르고 여기에 키를 등록해주세요.',
     onboard4Title: 'AI 맞춤 분석 실행',
     onboard4Body: '회사 정보와 API 키를 등록했다면 이 버튼으로 전체 공고를 분석할 수 있어요. 공고 건수에 따라 몇 분 걸릴 수 있습니다.',
+    onboardAdminTitle: '관리자 탭',
+    onboardAdminBody: '관리자는 이 탭에서 소스별 수집 상태를 확인하고, 자동 수집 일정을 설정하거나 "지금 업데이트"로 바로 재수집을 실행할 수 있습니다.',
     onboard5Title: '적합도로 필터링',
     onboard5Body: '분석이 끝나면 여기서 적합/부적합/확인 중 하나로 공고를 걸러볼 수 있습니다. 이제 자유롭게 둘러보세요!',
 
@@ -381,6 +383,8 @@ const TRANSLATIONS = {
     onboard3Body: 'Running AI fit analysis needs an API key for whichever model you pick. Choose a model above, then register your key here.',
     onboard4Title: 'Run AI fit analysis',
     onboard4Body: "Once your company info and API key are set, use this button to analyze every notice. It may take a few minutes depending on how many there are.",
+    onboardAdminTitle: 'Admin tab',
+    onboardAdminBody: "As an admin, you can check each source's collection status here, set an automatic collection schedule, or trigger a recollection right away with \"Update Now\".",
     onboard5Title: 'Filter by fit',
     onboard5Body: "Once the analysis finishes, filter notices here by fit, unfit, or unsure. You're all set — explore away!",
 

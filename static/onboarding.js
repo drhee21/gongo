@@ -6,14 +6,18 @@
 // 아직 언어를 고를 기회가 없었으므로(currentLang은 그냥 기본값 'ko'), 이 단계의
 // 문구만은 t()를 쓰지 않고 한국어·영어를 한 문장에 같이 보여준다. 언어 버튼을
 // 누르면 그 즉시 실제 투어(0단계)로 넘어간다.
-const ONBOARDING_STEPS = [
+const ONBOARDING_BASE_STEPS = [
   { view: 'list', selector: '.filters', titleKey: 'onboard1Title', bodyKey: 'onboard1Body' },
   { view: 'company', selector: '#companyForm', titleKey: 'onboard2Title', bodyKey: 'onboard2Body' },
   { view: 'company', selector: '#llmKeyInput', titleKey: 'onboard3Title', bodyKey: 'onboard3Body' },
   { view: 'company', selector: '#btnAiFit', titleKey: 'onboard4Title', bodyKey: 'onboard4Body' },
-  { view: 'list', selector: '#aiFitFilter', titleKey: 'onboard5Title', bodyKey: 'onboard5Body' },
 ];
+// 관리자 계정에서만, 마지막(적합도 필터) 단계 바로 앞에 끼워 넣는다 — 투어의 마무리
+// 멘트("이제 자유롭게 둘러보세요!")는 계정 종류와 무관하게 항상 마지막에 오게 둔다.
+const ONBOARDING_ADMIN_STEP = { view: 'admin', selector: '#adminSchedulerPanel', titleKey: 'onboardAdminTitle', bodyKey: 'onboardAdminBody' };
+const ONBOARDING_FINAL_STEP = { view: 'list', selector: '#aiFitFilter', titleKey: 'onboard5Title', bodyKey: 'onboard5Body' };
 
+let ONBOARDING_STEPS = [...ONBOARDING_BASE_STEPS, ONBOARDING_FINAL_STEP];
 let onboardActive = false;
 let onboardIndex = -1;
 
@@ -21,6 +25,9 @@ function startOnboardingTour(){
   if(onboardActive) return;
   onboardActive = true;
   onboardIndex = -1;
+  ONBOARDING_STEPS = currentUserState?.is_admin
+    ? [...ONBOARDING_BASE_STEPS, ONBOARDING_ADMIN_STEP, ONBOARDING_FINAL_STEP]
+    : [...ONBOARDING_BASE_STEPS, ONBOARDING_FINAL_STEP];
   buildOnboardingDom();
   showOnboardingStep(-1);
 }
