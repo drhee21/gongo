@@ -28,6 +28,8 @@ function startOnboardingTour(){
 function buildOnboardingDom(){
   if($('#onboardTooltip')) return;
 
+  document.body.classList.add('onboard-lock');
+
   const spot = document.createElement('div');
   spot.id = 'onboardSpotlight';
   spot.className = 'onboard-spotlight';
@@ -143,6 +145,7 @@ function positionOnboardingSpotlight(step){
 
 async function endOnboardingTour(){
   onboardActive = false;
+  document.body.classList.remove('onboard-lock');
   $('#onboardSpotlight')?.remove();
   $('#onboardTooltip')?.remove();
   if(currentUserState){
