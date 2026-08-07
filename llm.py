@@ -32,6 +32,8 @@ UserContent = Union[str, List[Dict[str, Any]]]
 # API로 보낼지 결정하므로, litellm이 그 모델명을 몰라도(신규/커스텀 모델이어도)
 # 그대로 해당 공급자에 전달된다.
 MODEL_CATALOG: List[Dict[str, str]] = [
+    # Claude(강한 순), GPT(강한 순), 그 다음 OpenRouter 전용 모델은 브랜드명 알파벳
+    # 순으로 묶고, 같은 브랜드 안에서는 강한 모델부터 배치한다.
     {"id": "anthropic/claude-opus-4-8", "label": "Claude Opus 4.8", "provider": "anthropic"},
     {"id": "anthropic/claude-sonnet-5", "label": "Claude Sonnet 5", "provider": "anthropic"},
     {"id": "anthropic/claude-haiku-4-5-20251001", "label": "Claude Haiku 4.5", "provider": "anthropic"},
@@ -39,26 +41,41 @@ MODEL_CATALOG: List[Dict[str, str]] = [
     {"id": "openai/gpt-5-mini", "label": "GPT-5 mini", "provider": "openai"},
     # OpenRouter는 Anthropic/OpenAI를 직접 호출하는 것과 별개로, 다른 공급자 계열
     # 모델을 키 하나로 쓸 수 있게 해준다 — 여기서는 이미 위에서 직접 지원하는
-    # Anthropic/OpenAI 대신, OpenRouter로만 접근 가능한 주요 공급자마다 대표
-    # 모델을 하나씩 추렸다(OpenRouter 자체 모델 목록 API로 실제 존재하는 id인지
-    # 확인함). 로플레이 파인튜닝 등 군소/커뮤니티 공급자는 제외했다.
+    # Anthropic/OpenAI 대신, OpenRouter로만 접근 가능한 주요 공급자마다 대표 모델을
+    # 하나씩 추렸다(대부분은 최상위 모델과, 같은 세대의 저렴한 소형 모델을 짝지어
+    # 함께 뒀다 — 레시피 발견처럼 저렴한 모델로도 충분한 반복 작업에 쓰라는 용도).
+    # OpenRouter 모델 목록 API로 실제 존재하는 id와 현재 가격(입력 기준, 1M 토큰당)을
+    # 확인함 — 배치(:batch) 전용 가격은 litellm의 일반 completion() 호출과 맞지
+    # 않아 제외했다. 로플레이 파인튜닝 등 군소/커뮤니티 공급자는 제외했다.
+    {"id": "openrouter/ai21/jamba-large-1.7", "label": "AI21 Jamba Large 1.7 (OpenRouter)", "provider": "openrouter"},
+    {"id": "openrouter/amazon/nova-premier-v1", "label": "Amazon Nova Premier (OpenRouter)", "provider": "openrouter"},
+    {"id": "openrouter/amazon/nova-micro-v1", "label": "Amazon Nova Micro (OpenRouter)", "provider": "openrouter"},
+    {"id": "openrouter/cohere/command-a", "label": "Cohere Command A (OpenRouter)", "provider": "openrouter"},
+    # Command A(최신 세대)와 같은 세대의 저렴한 소형 모델이 OpenRouter에 없어서,
+    # 이전 세대인 Command R7B를 대신 짝지었다.
+    {"id": "openrouter/cohere/command-r7b-12-2024", "label": "Cohere Command R7B (OpenRouter)", "provider": "openrouter"},
+    {"id": "openrouter/deepseek/deepseek-v3.2", "label": "DeepSeek V3.2 (OpenRouter)", "provider": "openrouter"},
+    # DeepSeek는 V3 세대에 저렴한 소형("Flash") 모델을 따로 내지 않았다 — V3 계열은
+    # V3/V3.1/V3.2가 전부 가격이 거의 같다. 진짜 저렴한 선택지는 V4 Flash뿐이라,
+    # 세대는 다르지만(V3.2 대신 V4) 이쪽을 짝지었다.
+    {"id": "openrouter/deepseek/deepseek-v4-flash", "label": "DeepSeek V4 Flash (OpenRouter)", "provider": "openrouter"},
     {"id": "openrouter/google/gemini-3.1-pro-preview", "label": "Gemini 3.1 Pro (OpenRouter)", "provider": "openrouter"},
     {"id": "openrouter/google/gemini-2.5-flash", "label": "Gemini 2.5 Flash (OpenRouter)", "provider": "openrouter"},
-    {"id": "openrouter/deepseek/deepseek-v3.2", "label": "DeepSeek V3.2 (OpenRouter)", "provider": "openrouter"},
-    {"id": "openrouter/mistralai/mistral-large-2512", "label": "Mistral Large (OpenRouter)", "provider": "openrouter"},
-    {"id": "openrouter/x-ai/grok-4.5", "label": "Grok 4.5 (OpenRouter)", "provider": "openrouter"},
+    {"id": "openrouter/google/gemini-3.1-flash-lite", "label": "Gemini 3.1 Flash Lite (OpenRouter)", "provider": "openrouter"},
     {"id": "openrouter/meta-llama/llama-4-maverick", "label": "Llama 4 Maverick (OpenRouter)", "provider": "openrouter"},
-    {"id": "openrouter/qwen/qwen3-max", "label": "Qwen3 Max (OpenRouter)", "provider": "openrouter"},
-    {"id": "openrouter/cohere/command-a", "label": "Cohere Command A (OpenRouter)", "provider": "openrouter"},
-    {"id": "openrouter/perplexity/sonar-pro", "label": "Perplexity Sonar Pro (OpenRouter)", "provider": "openrouter"},
-    {"id": "openrouter/amazon/nova-premier-v1", "label": "Amazon Nova Premier (OpenRouter)", "provider": "openrouter"},
+    {"id": "openrouter/meta-llama/llama-4-scout", "label": "Llama 4 Scout (OpenRouter)", "provider": "openrouter"},
     {"id": "openrouter/microsoft/phi-4", "label": "Microsoft Phi-4 (OpenRouter)", "provider": "openrouter"},
-    {"id": "openrouter/nvidia/nemotron-3-ultra-550b-a55b", "label": "NVIDIA Nemotron 3 Ultra (OpenRouter)", "provider": "openrouter"},
-    {"id": "openrouter/ai21/jamba-large-1.7", "label": "AI21 Jamba Large 1.7 (OpenRouter)", "provider": "openrouter"},
-    {"id": "openrouter/z-ai/glm-5.2", "label": "Zhipu GLM 5.2 (OpenRouter)", "provider": "openrouter"},
-    {"id": "openrouter/moonshotai/kimi-k3", "label": "Moonshot Kimi K3 (OpenRouter)", "provider": "openrouter"},
     {"id": "openrouter/minimax/minimax-m3", "label": "MiniMax M3 (OpenRouter)", "provider": "openrouter"},
+    {"id": "openrouter/mistralai/mistral-large-2512", "label": "Mistral Large (OpenRouter)", "provider": "openrouter"},
+    {"id": "openrouter/mistralai/ministral-8b-2512", "label": "Mistral Ministral 3 8B (OpenRouter)", "provider": "openrouter"},
+    {"id": "openrouter/moonshotai/kimi-k3", "label": "Moonshot Kimi K3 (OpenRouter)", "provider": "openrouter"},
+    {"id": "openrouter/nvidia/nemotron-3-ultra-550b-a55b", "label": "NVIDIA Nemotron 3 Ultra (OpenRouter)", "provider": "openrouter"},
+    {"id": "openrouter/perplexity/sonar-pro", "label": "Perplexity Sonar Pro (OpenRouter)", "provider": "openrouter"},
+    {"id": "openrouter/qwen/qwen3-max", "label": "Qwen3 Max (OpenRouter)", "provider": "openrouter"},
+    {"id": "openrouter/qwen/qwen3-30b-a3b-instruct-2507", "label": "Qwen3 30B A3B Instruct (OpenRouter)", "provider": "openrouter"},
     {"id": "openrouter/upstage/solar-pro-3", "label": "Upstage Solar Pro 3 (OpenRouter)", "provider": "openrouter"},
+    {"id": "openrouter/x-ai/grok-4.5", "label": "Grok 4.5 (OpenRouter)", "provider": "openrouter"},
+    {"id": "openrouter/z-ai/glm-5.2", "label": "Zhipu GLM 5.2 (OpenRouter)", "provider": "openrouter"},
 ]
 MODEL_BY_ID: Dict[str, Dict[str, str]] = {m["id"]: m for m in MODEL_CATALOG}
 DEFAULT_MODEL_ID = "anthropic/claude-opus-4-8"
