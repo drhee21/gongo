@@ -1613,6 +1613,26 @@ def get_disabled_source_ids() -> Set[str]:
     }
 
 
+def get_config_disabled_source_ids() -> Set[str]:
+    """관리자 재정의와 무관하게, config.json 자체에서 꺼둔 소스 id만 반환한다.
+
+    이 소스들은 관리자 재정의로도 되살릴 수 없는 상한선이므로(_apply_source_override
+    참고), 관리자 화면의 "소스 URL 재정의" 목록과 소스 상태 표에서 아예 나타나지 않아야
+    한다 — 토글해도 소용없는 컨트롤을 보여주는 대신, 목록에서 완전히 빼는 쪽이 맞다."""
+    cfg = load_config()
+    boards = cfg.get("boards") or {}
+    checks = [
+        ("kstartup", cfg.get("kstartup", {})),
+        ("bizinfo", cfg.get("bizinfo", {})),
+        ("g2b", cfg.get("g2b", {})),
+        ("nrf", boards.get("nrf", {})),
+        ("kddf", boards.get("kddf", {})),
+        ("biohub_direct", boards.get("biohub_direct", {})),
+        ("khidi_direct", boards.get("khidi_direct", {})),
+    ]
+    return {sid for sid, raw_cfg in checks if not raw_cfg.get("enabled", False)}
+
+
 def _run_with_retry(fn: Callable[[], Any], attempts: int = 2, delay_sec: float = 2.0) -> Any:
     """소스 수집 함수 하나를 실행하고, 실패하면 한 번 더 시도한다(기본 총 2회).
 
@@ -1633,7 +1653,12 @@ def _run_with_retry(fn: Callable[[], Any], attempts: int = 2, delay_sec: float =
 
 
 def _apply_source_override(sub_cfg: Dict[str, Any], source_id: str, overrides: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
-    """관리자가 재정의한 이름/URL/활성화 상태가 있으면 해당 소스 설정에 덮어쓴다."""
+    """관리자가 재정의한 이름/URL/활성화 상태가 있으면 해당 소스 설정에 덮어쓴다.
+
+    activated 여부는 config.json이 상한선이다 — config에서 이미 enabled: false인
+    소스는 관리자 재정의로도 되살아나지 않는다(재정의는 config가 켜둔 소스를 admin이
+    추가로 끄는 것만 가능하다). config에서 껐다 다시 켜려면 config.json 자체를
+    고쳐야 한다 — 그래야 "config에서 끄면 어디서도 안 보인다"가 항상 참이 된다."""
     override = overrides.get(source_id)
     if not override:
         return sub_cfg
@@ -1643,7 +1668,7 @@ def _apply_source_override(sub_cfg: Dict[str, Any], source_id: str, overrides: D
         sub_cfg["list_urls"] = [override["list_url"]]
     if override.get("name"):
         sub_cfg["name"] = override["name"]
-    if override.get("enabled") is not None:
+    if override.get("enabled") is not None and sub_cfg.get("enabled", False):
         sub_cfg["enabled"] = override["enabled"]
     return sub_cfg
 

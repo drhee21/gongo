@@ -291,10 +291,20 @@ class Handler(BaseHTTPRequestHandler):
                 disabled_sources = collector.get_disabled_source_ids()
                 for sid in disabled_sources:
                     displayed_counts[database.canonical_source_id(sid)] = 0
-                raw = database.list_sources(clean=False)
+                # config.json에서 꺼둔 소스는 admin 재정의로도 되살아나지 않는 상한선이므로
+                # (collector._apply_source_override 참고) 관리자 화면 어디에도 아예 나타나지
+                # 않아야 한다 — "비활성화" 행으로 보여주는 대신 목록 자체에서 제외한다.
+                config_disabled = {
+                    database.canonical_source_id(sid) for sid in collector.get_config_disabled_source_ids()
+                }
+                raw = [
+                    r for r in database.list_sources(clean=False)
+                    if database.canonical_source_id(r.get("id") or "") not in config_disabled
+                ]
                 for r in raw:
                     r["displayed_count"] = displayed_counts.get(database.canonical_source_id(r.get("id") or ""), 0)
-                self.send_json({"ok": True, "items": database.list_sources(), "raw": raw})
+                items = [it for it in database.list_sources() if it.get("id") not in config_disabled]
+                self.send_json({"ok": True, "items": items, "raw": raw})
                 return
             if path == "/api/admin/source-overrides":
                 user = current_user(self)
@@ -316,6 +326,11 @@ class Handler(BaseHTTPRequestHandler):
                     ("bizinfo", "기업마당", None, (cfg.get("bizinfo") or {}).get("enabled", False)),
                     ("g2b", "나라장터", None, (cfg.get("g2b") or {}).get("enabled", False)),
                 ]:
+                    if not default_enabled:
+                        # config.json 자체에서 꺼둔 소스는 admin 재정의로도 되살릴 수
+                        # 없는 상한선이므로(collector._apply_source_override 참고),
+                        # 켜봐야 소용없는 토글을 보여주는 대신 목록에서 아예 뺀다.
+                        continue
                     ov = overrides.get(sid) or {}
                     items.append({
                         "source_id": sid,
@@ -539,6 +554,9 @@ class Handler(BaseHTTPRequestHandler):
                 if source_id not in OVERRIDABLE_SOURCES:
                     self.send_json({"ok": False, "error": "알 수 없는 소스입니다"}, status=400)
                     return
+                if source_id in collector.get_config_disabled_source_ids():
+                    self.send_json({"ok": False, "error": "config.json에서 꺼둔 소스입니다"}, status=400)
+                    return
                 list_url = str(data.get("list_url") or "").strip()
                 name = str(data.get("name") or "").strip()
                 database.set_source_override(source_id, list_url or None, name or None)
@@ -553,6 +571,9 @@ class Handler(BaseHTTPRequestHandler):
                 source_id = str(data.get("source_id") or "").strip()
                 if source_id not in OVERRIDABLE_SOURCES:
                     self.send_json({"ok": False, "error": "알 수 없는 소스입니다"}, status=400)
+                    return
+                if source_id in collector.get_config_disabled_source_ids():
+                    self.send_json({"ok": False, "error": "config.json에서 꺼둔 소스입니다"}, status=400)
                     return
                 database.set_source_enabled_override(source_id, bool(data.get("enabled")))
                 self.send_json({"ok": True, "source_id": source_id})
