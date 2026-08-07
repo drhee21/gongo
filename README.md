@@ -187,6 +187,12 @@ Invoke-RestMethod -Method Post http://127.0.0.1:8080/api/recollect | ConvertTo-J
 6. 시작 커맨드는 `Procfile`에 정의되어 있습니다: `python server.py --host 0.0.0.0 --port $PORT` — 대부분의 플랫폼이 `Procfile`을 자동 인식합니다.
 7. 배포 후 도메인으로 접속해서 회원가입 → 로그인 → AI 모델 API 키 등록까지 되는지 확인하세요.
 
+### 왜 Vercel + Supabase는 권장하지 않는가
+
+Vercel은 상태 없는(stateless) 서버리스 함수 위에서 동작하는 걸 전제로 합니다 — 요청마다 격리된 실행 환경이 뜨고, 파일시스템은 사실상 읽기 전용/휘발성입니다. 이 앱은 정반대로 두 가지를 요구합니다: (1) `scheduler.py`가 서버 프로세스 안에서 계속 살아있는 백그라운드 스레드로 폴링하는 구조라 "계속 실행 중인 프로세스"가 필요하고, (2) `data/gongo.sqlite`가 요청 사이·재배포 사이에도 그대로 남아있는 로컬 파일이어야 합니다. 둘 다 Vercel의 실행 모델과 맞지 않습니다.
+
+Supabase(Postgres)로 DB를 옮기면 (2)는 해결되지만 (1)은 여전히 남습니다 — 스케줄러를 Vercel Cron 같은 것으로 옮기려면 `scheduler_loop()`의 폴링 방식 자체를 "정해진 시각에 한 번 호출되는 serverless 엔드포인트"로 다시 설계해야 하고, `database.py`의 raw SQL(`sqlite3.Row`, `ON CONFLICT` 문법 등)도 Postgres에 맞게 다시 써야 합니다. 즉 배포 설정만 바꾸는 게 아니라 실질적인 재작성이 필요하다는 뜻이라, 지금 구조 그대로 갈 수 있는 Railway/Render 같은 상시 실행형 플랫폼을 권장합니다.
+
 ## 레시피 기반 수집 (K-Startup / NRF / KDDF / 서울바이오허브)
 
 이 네 소스는 사이트 전용 파서를 손으로 짜는 대신, LLM이 사이트 구조를 **한 번** 분석해서 만든
