@@ -351,7 +351,7 @@ function renderSources(){
   const mini = displaySources.map(s=>`<div class="source-mini"><span>${esc(s.name || s.id)}</span><span class="state-ok">${esc(t('statusNormal'))} ${Number(s.count)||0}</span></div>`).join('');
   $('#sourceMini').innerHTML = mini || `<div class="source-mini">${esc(t('emptyBeforeCollect'))}</div>`;
   const adminRows = rawSources.length ? rawSources : displaySources;
-  $('#sourcesTable').innerHTML = `<table class="table"><thead><tr><th>${esc(t('colId'))}</th><th>${esc(t('colSource'))}</th><th>${esc(t('colState'))}</th><th>${esc(t('colCount'))}</th><th>${esc(t('colDisplayedCount'))}</th><th>${esc(t('colError'))}</th></tr></thead><tbody>${adminRows.map(s=>`<tr><td>${esc(s.id)}</td><td>${esc(SOURCE_NAME_KEYS[canonicalSource(s.id)] ? t(SOURCE_NAME_KEYS[canonicalSource(s.id)]) : (s.name||s.id))}</td><td>${esc(tStatus(s.state||'미확인'))}${s.anomaly?`<span class="badge-warn" title="${esc(s.anomaly_note||'')}">${esc(t('anomalyBadgeText'))}</span>`:''}</td><td>${esc(Number(s.count)||0)}</td><td>${esc(Number(s.displayed_count)||0)}</td><td>${esc(s.error||s.anomaly_note||'')}</td></tr>`).join('')}</tbody></table>`;
+  $('#sourcesTable').innerHTML = `<table class="table"><thead><tr><th>${esc(t('colId'))}</th><th>${esc(t('colSource'))}</th><th>${esc(t('colState'))}</th><th>${esc(t('colCount'))}</th><th>${esc(t('colDisplayedCount'))}</th><th>${esc(t('colError'))}</th></tr></thead><tbody>${adminRows.map(s=>`<tr><td>${esc(s.id)}</td><td>${esc(SOURCE_NAME_KEYS[canonicalSource(s.id)] ? t(SOURCE_NAME_KEYS[canonicalSource(s.id)]) : (s.name||s.id))}</td><td>${esc(tStatus(s.state||'미확인'))}${s.anomaly_note?`<span class="badge-warn" title="${esc(s.anomaly_note||'')}">${esc(t('anomalyBadgeText'))}</span>`:''}</td><td>${esc(Number(s.count)||0)}</td><td>${esc(Number(s.displayed_count)||0)}</td><td>${esc(s.error||'')}</td></tr>`).join('')}</tbody></table>`;
   const sel = $('#sourceFilter');
   const cur = canonicalSource(sel.value);
   const ids = [...new Set(notices.flatMap(a=>noticeSources(a).map(s=>s.id)))];
@@ -525,7 +525,7 @@ async function loadAllSources(){
     const custom = (customRes.items || []).map(s => `
       <div class="custom-source-row" data-source="${esc(s.id)}" data-kind="custom">
         <div class="custom-source-info">
-          <div><strong>${esc(s.name)}</strong> ${s.enabled ? '' : `<span class="badge-warn">${esc(t('disabledBadge'))}</span>`}${s.anomaly ? `<span class="badge-warn" title="${esc(s.anomaly_note||'')}">${esc(t('anomalyBadgeText'))}</span>` : ''}${s.uses_detail_fetch ? `<span class="badge-warn" title="${esc(t('detailFetchBadgeTitle'))}">${esc(t('detailFetchBadgeText'))}</span>` : ''}</div>
+          <div><strong>${esc(s.name)}</strong> ${s.enabled ? '' : `<span class="badge-warn">${esc(t('disabledBadge'))}</span>`}${s.anomaly_note ? `<span class="badge-warn" title="${esc(s.anomaly_note||'')}">${esc(t('anomalyBadgeText'))}</span>` : ''}${s.uses_detail_fetch ? `<span class="badge-warn" title="${esc(t('detailFetchBadgeTitle'))}">${esc(t('detailFetchBadgeText'))}</span>` : ''}</div>
           <div class="custom-source-url">${esc(s.list_url)}</div>
           <div class="meta">${esc(tStatus(s.state || '미확인'))} · ${esc(countText(Number(s.count)||0))} ${s.last_collected_at ? '· ' + esc(s.last_collected_at) : ''}</div>
         </div>

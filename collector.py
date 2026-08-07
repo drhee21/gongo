@@ -40,14 +40,14 @@ SESSION = requests.Session()
 SESSION.headers.update({"User-Agent": UA, "Accept-Language": "ko-KR,ko;q=0.9"})
 
 SOURCE_CATALOG: Dict[str, Dict[str, str]] = {
-    "kstartup": {"name": "K-스타트업", "method": "HTML"},
+    "kstartup": {"name": "K-스타트업", "method": "레시피"},
     "bizinfo": {"name": "기업마당", "method": "API"},
     "biohub": {"name": "서울바이오허브", "method": "기업마당 경유"},
     "khidi": {"name": "보산원/KHIDI", "method": "기업마당 경유"},
-    "nrf": {"name": "한국연구재단", "method": "게시판"},
-    "kddf": {"name": "국가신약개발사업단", "method": "게시판"},
+    "nrf": {"name": "한국연구재단", "method": "레시피"},
+    "kddf": {"name": "국가신약개발사업단", "method": "레시피"},
     "sample": {"name": "샘플", "method": "내장 데이터"},
-    "biohub_direct": {"name": "서울바이오허브", "method": "전용 파서"},
+    "biohub_direct": {"name": "서울바이오허브", "method": "레시피"},
     "khidi_direct": {"name": "보건산업진흥원/KHIDI", "method": "게시판"},
     "g2b": {"name": "나라장터", "method": "API"},
 }
@@ -324,7 +324,14 @@ def collect_bizinfo(cfg: Dict[str, Any], route: Dict[str, List[str]]) -> Dict[st
                 if any(kw and kw in haystack for kw in keywords):
                     src = route_src
                     break
-            item = normalize(src, title, org, cat, start, end, url, elig=elig_from_text(target, title, haystack), raw=it)
+            # bsnsSumryCn(사업 요약 설명, HTML)이 API 응답에 이미 포함되어 있어 별도로
+            # 상세 페이지를 가져올 필요 없이 자금성 판정(funding_classifier)의
+            # classify_text로 그대로 쓸 수 있다.
+            classify_text = _strip_html_to_text(pick(it, "bsnsSumryCn") or "") or None
+            elig = elig_from_text(target, title, haystack, classify_text)
+            item = normalize(src, title, org, cat, start, end, url, elig=elig, raw=it)
+            if classify_text:
+                item["raw"]["classify_text"] = classify_text
             mark_dates_unknown_if_needed(item, period_text or "", start_was_known=bool(start))
             out.setdefault(src, []).append(item)
 
@@ -447,155 +454,6 @@ def collect_g2b(cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
 
 
 KSTARTUP_DEFAULT_URL = "https://www.k-startup.go.kr/web/contents/bizpbanc-ongoing.do"
-# 카테고리 배지는 클래스가 "flag typeNN"(NN=두 자리 숫자) 형태이고, 같은 부모 안에
-# D-day 배지도 "flag day"로 같은 flag 클래스를 공유한다. day와 구분하려고 day가
-# 아닌 것을 걸러내는 대신, "typeNN 모양인가"를 직접 확인한다 — 나중에 flag 클래스가
-# 하나 더 늘어나도(day 외의 새 배지) 엉뚱한 걸 카테고리로 오인하지 않는다.
-KSTARTUP_TYPE_CLASS_RE = re.compile(r"^type\d{2}$")
-KSTARTUP_GO_VIEW_RE = re.compile(r"go_view\(\s*(\d+)\s*\)")
-KSTARTUP_LAST_PAGE_RE = re.compile(r"fn_egov_link_page\(\s*(\d+)\s*\)")
-
-
-def detect_kstartup_last_page(html: str) -> int:
-    """페이지네이션 링크(fn_egov_link_page(N))에 나오는 값 중 가장 큰 수가 마지막
-    페이지 번호다. "마지막페이지" 버튼도 같은 함수를 호출하므로 별도 텍스트 매칭
-    없이 이 값들의 최댓값만 구하면 된다."""
-    nums = [int(n) for n in KSTARTUP_LAST_PAGE_RE.findall(html)]
-    return max(nums) if nums else 1
-
-
-def parse_kstartup_html_items(html: str, page_url: str, max_items: int = 80) -> List[Dict[str, Any]]:
-    soup = BeautifulSoup(html, "html.parser")
-    container = soup.select_one("#bizPbancList")
-    if not container:
-        return []
-
-    out: List[Dict[str, Any]] = []
-    for li in container.select("li"):
-        inner = li.select_one("div.inner")
-        if not inner:
-            continue
-
-        tit_el = inner.select_one("div.right > div.middle > a > div.tit_wrap > p.tit")
-        title = clean(tit_el.get_text()) if tit_el else ""
-        if len(title) < 4:
-            continue
-
-        # 목록 링크가 <a href>가 아니라 "javascript:go_view(178627)" 형태라서, 그
-        # 안의 글 번호(pbancSn)를 뽑아 상세 페이지 URL을 직접 만든다.
-        a = inner.select_one("div.right > div.middle > a")
-        href = a.get("href", "") if a else ""
-        m_id = KSTARTUP_GO_VIEW_RE.search(href)
-        url = urljoin(page_url, f"?schM=view&pbancSn={m_id.group(1)}") if m_id else page_url
-
-        # 카테고리 배지는 "flag typeNN" 형태다. 같은 자리에 D-day 배지("flag day")도
-        # 있어서 그냥 첫 span.flag를 집으면 틀릴 수 있으므로 typeNN 모양인 것만 취한다.
-        category = "창업지원"
-        top = inner.select_one("div.right > div.top")
-        if top:
-            for span in top.select("span.flag"):
-                if any(KSTARTUP_TYPE_CLASS_RE.match(c) for c in (span.get("class") or [])):
-                    category = clean(span.get_text()) or category
-                    break
-
-        # 기관명/등록일자/시작일자/마감일자/조회수가 전부 같은 모양의 span.list로
-        # 나열되어 있다. 순서가 아니라 라벨 문자열로 구분한다 — 위치는 사이트가
-        # 배지를 하나 더 넣거나 순서를 바꾸면 바로 깨지지만, 라벨은 그대로다.
-        # 맨 첫 번째 span.list는 제목과 중복된 텍스트라 org 후보에서 제외한다.
-        spans = inner.select("div.right > div.bottom > span.list")
-        org = ""
-        start = end = None
-        for i, s in enumerate(spans):
-            text = clean(s.get_text(" "))
-            if i == 0:
-                continue
-            if text.startswith("등록일자") or text.startswith("조회"):
-                continue
-            if text.startswith("시작일자"):
-                m = re.search(r"(20\d{2}-\d{2}-\d{2})", text)
-                if m:
-                    start = m.group(1)
-                continue
-            if text.startswith("마감일자"):
-                m = re.search(r"(20\d{2}-\d{2}-\d{2})", text)
-                if m:
-                    end = m.group(1)
-                continue
-            if not org:
-                org = text
-        org = org or "K-Startup"
-
-        row_text = clean(inner.get_text(" ", strip=True))[:1200]
-        elig = elig_from_text(title, category, row_text)
-        item = normalize(
-            "kstartup", title, org, category, start, end, url,
-            budget="공고 참조", elig=elig, raw={"row_text": row_text},
-        )
-        if not start:
-            item["start"] = None
-        # 마감일자가 없거나 형식이 안 맞아 못 뽑았을 때, 카드 전체를 버리지 않는다.
-        # 페이지 구조가 통째로 바뀌었는지(전체 실패)는 이 함수가 0건을 반환했을 때
-        # collect_kstartup()이 이미 예외로 잡아내므로, 카드 하나가 날짜를 못 찾았다고
-        # 그 카드까지 버릴 필요는 없다 — 상시류 표현이 있으면 상시로, 없으면
-        # 날짜 미상으로 남기고 카드 자체는 보여준다.
-        mark_dates_unknown_if_needed(item, row_text, start_was_known=bool(start))
-        out.append(item)
-        if len(out) >= max_items:
-            break
-    return out
-
-
-def collect_kstartup(cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """K-Startup 모집중 웹페이지 HTML 직접 크롤링.
-
-    더 이상 collect_all()이 평시 수집에 쓰지 않는다(_collect_via_stored_recipe()로
-    대체됨) — 만일을 위해 코드만 남겨뒀다.
-
-    API 키를 사용하지 않는다. 기본 URL은
-    https://www.k-startup.go.kr/web/contents/bizpbanc-ongoing.do 이다.
-
-    이 페이지는 한 번에 15건씩만 보여주고 페이지 크기를 늘릴 수 없어서(API가
-    아니라 서버 렌더링 HTML), 더 가져오려면 여러 페이지(?page=N)를 순회해야
-    한다. max_items_per_source에 도달하거나, 사이트가 알려주는 마지막 페이지
-    번호(첫 페이지에서 읽어온다)를 넘어서면 멈춘다.
-    """
-    if not cfg.get("enabled", False):
-        raise RuntimeError("비활성화됨")
-    base_url = clean(cfg.get("list_url") or KSTARTUP_DEFAULT_URL)
-    if not base_url or base_url.startswith("TODO"):
-        raise RuntimeError("list_url 미설정")
-    if cfg.get("respect_robots", True) and not robots_allows(base_url):
-        raise PermissionError("robots.txt 차단")
-
-    timeout = cfg.get("timeout_sec", 20)
-    max_items = resolve_max_items(cfg.get("max_items", cfg.get("max_items_per_source", 80)))
-
-    out: List[Dict[str, Any]] = []
-    last_error: Optional[Exception] = None
-    last_page: Optional[int] = None
-    page = 1
-    while (last_page is None or page <= last_page) and len(out) < max_items:
-        url = base_url if page == 1 else f"{base_url}?page={page}"
-        try:
-            r = SESSION.get(url, timeout=timeout)
-            r.raise_for_status()
-            if not r.encoding or r.encoding.lower() == "iso-8859-1":
-                r.encoding = r.apparent_encoding
-            if last_page is None:
-                last_page = detect_kstartup_last_page(r.text)
-            items = parse_kstartup_html_items(r.text, url, max_items=max_items - len(out))
-            out.extend(items)
-            page += 1
-            if (last_page is None or page <= last_page) and len(out) < max_items:
-                time.sleep(float(cfg.get("request_delay_sec", 0.3)))
-        except Exception as e:
-            last_error = e
-            break
-
-    out = deduplicate(out)
-    if not out:
-        raise last_error or RuntimeError("K-Startup HTML 0건: 페이지 구조 변경 또는 접속 차단")
-    return out[:max_items]
 
 
 def robots_allows(url: str) -> bool:
@@ -724,104 +582,6 @@ def collect_board(source_id: str, bcfg: Dict[str, Any], common: Dict[str, Any]) 
     if not out:
         raise RuntimeError("0건 파싱: link_pattern 또는 게시판 구조 확인 필요")
     time.sleep(float(common.get("request_delay_sec", 0.8)))
-    return out
-
-
-# ──────────────────────────── 국가신약개발사업단(KDDF) 전용 수집기 ────────────────────────────
-# collect_board의 link_pattern 기반 범용 파싱 대신, kddf 게시판이 실제 테이블 구조
-# (div.board_table > table > tbody > tr, 각 행에 td.subject/td.td_period/td.td_state)를
-# 갖고 있다는 걸 활용해 제목·기간·진행상태를 훨씬 정확하게 뽑는다.
-
-
-def collect_kddf(bcfg: Dict[str, Any], common: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """더 이상 collect_all()이 평시 수집에 쓰지 않는다(_collect_via_stored_recipe()로
-    대체됨) — 만일을 위해 코드만 남겨뒀다."""
-    if not bcfg.get("enabled", False):
-        raise RuntimeError("비활성화됨")
-    list_url = clean(bcfg.get("list_url"))
-    if not list_url or list_url.startswith("TODO"):
-        raise RuntimeError("list_url 미설정")
-    if common.get("respect_robots", True) and not robots_allows(list_url):
-        raise PermissionError("robots.txt 차단")
-
-    base_url = bcfg.get("base_url") or list_url
-    org_default = bcfg.get("org") or bcfg.get("name") or "국가신약개발사업단"
-    category = bcfg.get("category") or "R&D"
-    # 진행/완료 상태는 사이트 자체가 이미 판단해서 보여주는 값이라 참고용으로 쓸모
-    # 있지만, 지금은 다른 소스와 마찬가지로 status_of()가 end_date만으로 상태를
-    # 계산하므로 기본은 수집하지 않는다. config에서 include_state:true로 켜면
-    # raw 데이터에만 남긴다(화면 로직에는 아직 반영하지 않음).
-    include_state = bool(bcfg.get("include_state", False))
-    max_items = resolve_max_items(common.get("max_items_per_source", 60))
-    timeout = common.get("timeout_sec", 20)
-    delay = float(common.get("request_delay_sec", 0.8))
-
-    out: List[Dict[str, Any]] = []
-    seen = set()
-    page = 1
-    while len(out) < max_items:
-        r = SESSION.get(list_url, params={"page": str(page)}, timeout=timeout)
-        r.raise_for_status()
-        if not r.encoding or r.encoding.lower() == "iso-8859-1":
-            r.encoding = r.apparent_encoding
-        soup = BeautifulSoup(r.text, "html.parser")
-
-        added = 0
-        for tr in soup.select("div.board_table table tbody tr"):
-            subj = tr.select_one("td.subject")
-            a = subj.select_one("a") if subj else None
-            if not a:
-                continue
-            href = a.get("href", "")
-            url = urljoin(base_url, href)
-            url = re.sub(r"(?<!:)/{2,}", "/", url)
-            if url in seen:
-                continue
-            seen.add(url)
-
-            span = a.select_one("span")
-            title_text = a.get_text(" ", strip=True)
-            org = org_default
-            if span:
-                span_text = clean(span.get_text())
-                org = span_text.strip("[]") or org_default
-                title_text = title_text.replace(span_text, "", 1)
-            title = clean(title_text)
-            if len(title) < 4:
-                continue
-
-            period_el = tr.select_one("td.td_period")
-            period_text = clean(period_el.get_text()) if period_el else ""
-            start = end = None
-            parts = re.split(r"[~∼]", period_text, maxsplit=1)
-            if len(parts) == 2:
-                start = parse_date(parts[0])
-                end = parse_date(parts[1])
-
-            raw: Dict[str, Any] = {"row_text": clean(tr.get_text(" ", strip=True))}
-            if include_state:
-                state_el = tr.select_one("td.td_state div.state_txt")
-                if state_el:
-                    raw["state"] = clean(state_el.get_text())
-
-            item = normalize("kddf", title, org, category, start, end, url, raw=raw)
-            mark_dates_unknown_if_needed(item, period_text, start_was_known=bool(start))
-            out.append(item)
-            added += 1
-            if len(out) >= max_items:
-                break
-
-        # 페이지에서 새 항목을 하나도 못 뽑았으면(진짜 마지막 페이지를 넘어가면
-        # 이 게시판은 빈 테이블 대신 안내용 빈 행 하나를 내려준다) 더 이상
-        # 페이지가 없다고 보고 멈춘다.
-        if added == 0:
-            break
-        page += 1
-        if delay:
-            time.sleep(delay)
-
-    if not out:
-        raise RuntimeError("0건 파싱: kddf 게시판 구조 확인 필요")
     return out
 
 
@@ -975,10 +735,18 @@ def collect_khidi_direct(
             continue
         seen.add(url)
 
+        # content는 자금성 판정(funding_classifier)의 classify_text로도 쓰므로,
+        # 마감일 추정에 쓰이는지 여부(아래 contents dict)와 무관하게 항상 한 번만
+        # 뽑아서 재사용한다 — 별도로 다시 파싱하지 않는다.
+        content_text = _strip_html_to_text(html.unescape(row.findtext("content") or ""))
         start, end = parse_title_dates(title)
+        elig = elig_from_text(title, content_text) if content_text else None
+        raw: Dict[str, Any] = {"post_date": clean(row.findtext("date") or "")}
+        if content_text:
+            raw["classify_text"] = content_text
         item = normalize(
             "khidi_direct", title, org_default, category, start, end, url,
-            raw={"post_date": clean(row.findtext("date") or "")},
+            elig=elig, raw=raw,
         )
         # normalize()는 start가 비어 있으면 오늘 날짜로 채우는데, 마감일만 뽑히고
         # 시작일은 못 뽑은 경우(제목에 종료일만 있는 경우가 대부분) "오늘부터
@@ -989,7 +757,7 @@ def collect_khidi_direct(
             item["start"] = None
         mark_dates_unknown_if_needed(item, title, start_was_known=bool(start))
         if not end or not start:
-            contents[item["id"]] = _strip_html_to_text(html.unescape(row.findtext("content") or ""))
+            contents[item["id"]] = content_text
         out.append(item)
         if len(out) >= max_items:
             break
@@ -998,385 +766,6 @@ def collect_khidi_direct(
         raise RuntimeError("0건 파싱: khidi 공고 API 구조 확인 필요")
     enrich_khidi_deadlines_with_ai(out, contents, triggering_user_id)
     time.sleep(float(common.get("request_delay_sec", 0.8)))
-    return out
-
-
-# ──────────────────────────── 한국연구재단(NRF) - IRIS 경유 수집 ────────────────────────────
-# nrf.re.kr 자체 사이트는 robots.txt가 루트(/) 외 전체를 차단해서 직접 크롤링이 불가능하다.
-# 대신 범부처통합연구지원시스템(IRIS, iris.go.kr)의 사업공고 목록에서 한국연구재단(sorgnId=10001)
-# 공고만 필터링해 가져온다. 이 목록/상세 경로는 IRIS의 robots.txt에서 막혀있지 않다.
-IRIS_VIEW_URL = "https://www.iris.go.kr/contents/retrieveBsnsAncmView.do"
-IRIS_VIEW_ONCLICK_RE = re.compile(
-    r"f_bsnsAncmListForm_view\('([^']*)','([^']*)','([^']*)','([^']*)','([^']*)','([^']*)','([^']*)'\)"
-)
-
-
-def parse_iris_list_items(html: str) -> List[Dict[str, Any]]:
-    soup = BeautifulSoup(html, "html.parser")
-    out: List[Dict[str, Any]] = []
-    for li in soup.select(".tstyle.list.biz_announce .dbody li"):
-        a = li.select_one(".title a")
-        if not a:
-            continue
-        title = clean(a.get_text(" ", strip=True))
-        if not title:
-            continue
-
-        detail_url = IRIS_VIEW_URL
-        start = end = None
-        m = IRIS_VIEW_ONCLICK_RE.search(a.get("onclick") or "")
-        if m:
-            ancm_id, bsns_yy, sorgn_bsns_cd, bsns_ancm_sn, d_day, rcve_str, rcve_end = m.groups()
-            detail_url = (
-                f"{IRIS_VIEW_URL}?ancmId={ancm_id}&bsnsYyDetail={bsns_yy}"
-                f"&sorgnBsnsCd={sorgn_bsns_cd}&bsnsAncmSn={bsns_ancm_sn}&detailDDay={d_day}"
-            )
-            start, end = parse_period(f"{rcve_str}~{rcve_end}")
-
-        period_el = li.select_one(".period")
-        if period_el and (not start or not end):
-            st2, en2 = parse_period(clean(period_el.get_text(" ", strip=True)))
-            start, end = start or st2, end or en2
-
-        inst_el = li.select_one(".inst_title")
-        inst = clean(inst_el.get_text(" ", strip=True)) if inst_el else ""
-        org = inst.rsplit(">", 1)[-1].strip() if ">" in inst else (inst or "한국연구재단")
-
-        etc: Dict[str, str] = {}
-        for span in li.select(".etc_info span"):
-            em = span.find("em")
-            if not em:
-                continue
-            label = clean(em.get_text())
-            value = clean(span.get_text()).replace(label, "", 1).strip()
-            if label and value:
-                etc[label] = value
-
-        elig = elig_from_text(title, etc.get("세부사업명", ""), etc.get("사업공고명", ""))
-        nrf_item = normalize(
-            "nrf", title, org or "한국연구재단", "R&D", start, end, detail_url,
-            budget="공고 참조", elig=elig, raw={"collector": "nrf_iris", "inst": inst, **etc},
-        )
-        mark_dates_unknown_if_needed(nrf_item, li.get_text(" ", strip=True), start_was_known=bool(start))
-        out.append(nrf_item)
-    return out
-
-
-def collect_nrf_iris(bcfg: Dict[str, Any], common: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """더 이상 collect_all()이 평시 수집에 쓰지 않는다(_collect_via_stored_recipe()로
-    대체됨) — 만일을 위해 코드만 남겨뒀다."""
-    if not bcfg.get("enabled", False):
-        raise RuntimeError("비활성화됨")
-    list_url = clean(bcfg.get("list_url"))
-    if not list_url or list_url.startswith("TODO"):
-        raise RuntimeError("list_url 미설정")
-    if common.get("respect_robots", True) and not robots_allows(list_url):
-        raise PermissionError("robots.txt 차단")
-
-    timeout = common.get("timeout_sec", 20)
-    max_items = resolve_max_items(common.get("max_items_per_source", 60))
-    sep = "&" if "?" in list_url else "?"
-
-    out: List[Dict[str, Any]] = []
-    page = 1
-    while True:
-        url = list_url if page == 1 else f"{list_url}{sep}pageIndex={page}"
-        r = SESSION.get(url, timeout=timeout)
-        r.raise_for_status()
-        if not r.encoding or r.encoding.lower() == "iso-8859-1":
-            r.encoding = r.apparent_encoding
-        items = parse_iris_list_items(r.text)
-        if not items:
-            break
-        out.extend(items)
-        if len(out) >= max_items:
-            break
-        page += 1
-        time.sleep(float(common.get("request_delay_sec", 0.8)))
-
-    out = deduplicate(out)
-    if not out:
-        raise RuntimeError("NRF(IRIS) 0건: sorgnId 필터 또는 IRIS 목록 페이지 구조 확인 필요")
-    return out[:max_items]
-
-
-# ──────────────────────────── 서울바이오허브 전용 수집기 ────────────────────────────
-
-
-def guess_biohub_category(title: str, text: str) -> str:
-    hay = f"{title} {text}"
-    if any(k in hay for k in ["입주", "공간", "센터"]):
-        return "입주·공간"
-    if any(k in hay for k in ["오픈이노베이션", "파트너링", "공동연구", "PoC", "대원제약", "SK바이오팜"]):
-        return "오픈이노베이션"
-    if any(k in hay for k in ["IR", "투자", "피칭"]):
-        return "IR·투자유치"
-    if any(k in hay for k in ["AI", "의료데이터", "데이터"]):
-        return "AI·의료데이터"
-    if any(k in hay for k in ["행사", "세미나", "교육", "네트워킹"]):
-        return "행사·네트워크"
-    return "바이오·헬스"
-
-
-def compact_biohub_title(title: str) -> str:
-    title = clean(title)
-    title = re.sub(r"^(예약신청\s*>\s*)?프로그램\s*>\s*프로그램\s*상세페이지\s*\|\s*서울바이오.*$", "", title)
-    title = re.sub(r"^서울바이오허브\s*", "", title)
-    return clean(title)
-
-
-def choose_biohub_title(soup: BeautifulSoup) -> str:
-    # 서울바이오허브 상세 페이지는 실제 공고명을 두 곳에 그대로 담고 있다:
-    # 1) hidden input(name="title") — 상세 페이지 뷰 폼이 제출하는 원본 값
-    # 2) p.pop-cont-title > strong — 화면에 보이는 제목 영역
-    # 두 값은 실사용 페이지들에서 항상 일치함을 확인했다. meta 태그(og:title 등)는
-    # 이 사이트에서는 사이트 공용 값("Seoulbiohub")이거나 애초에 존재하지 않고,
-    # 본문 헤딩(h1~h6/strong/b) 스캔은 페이지 상단 접근성 링크나 개인정보 재동의
-    # 모달 텍스트를 오탐하기 쉬워 전부 제거했다.
-    title_input = soup.find("input", attrs={"name": "title"})
-    if title_input and clean(title_input.get("value")):
-        t = compact_biohub_title(title_input.get("value"))
-        if len(t) >= 8 and "서울바이오허브" not in {t}:
-            return t
-
-    pop_title = soup.select_one("p.pop-cont-title strong")
-    if pop_title:
-        t = compact_biohub_title(pop_title.get_text(" ", strip=True))
-        if len(t) >= 8 and "서울바이오허브" not in {t}:
-            return t
-
-    return "서울바이오허브 공고"
-
-
-def first_line_after_label(lines: List[str], labels: List[str], max_next: int = 2) -> Optional[str]:
-    label_re = re.compile("|".join(re.escape(x) for x in labels))
-    for i, line in enumerate(lines):
-        if not label_re.search(line):
-            continue
-        # 같은 줄에 값이 붙어 있는 경우
-        after = re.sub(r"^.*?(" + "|".join(re.escape(x) for x in labels) + r")\s*[:：]?\s*", "", line).strip()
-        if after and after != line and len(after) > 2:
-            return after
-        for j in range(1, max_next + 1):
-            if i + j < len(lines):
-                nxt = clean(lines[i + j])
-                if nxt and not label_re.fullmatch(nxt):
-                    return nxt
-    return None
-
-
-def extract_biohub_period(lines: List[str], text: str) -> Tuple[Optional[str], Optional[str]]:
-    labels = ["신청기간", "모집기간", "모집 기간", "접수기간", "접수 기간", "신청 마감", "신청마감", "마감"]
-    # 1) 라벨 다음 줄/같은 줄 우선
-    v = first_line_after_label(lines, labels, max_next=3)
-    if v:
-        st, en = parse_period(v)
-        if st or en:
-            return st, en
-    # 2) 라벨 주변 160자 검색
-    for lab in labels:
-        m = re.search(re.escape(lab) + r"\s*[:：]?\s*(.{0,180})", text)
-        if m:
-            st, en = parse_period(m.group(1))
-            if st or en:
-                return st, en
-    # 3) 상세 공고 안에서 자주 나오는 날짜 범위 패턴
-    m = re.search(r"(20\d{2}\s*년\s*\d{1,2}\s*월\s*\d{1,2}\s*일[^~∼〜\n]{0,20}[~∼〜][^\n]{0,80})", text)
-    if m:
-        st, en = parse_period(m.group(1))
-        if st or en:
-            return st, en
-    return None, None
-
-
-def extract_biohub_budget(lines: List[str], text: str) -> str:
-    labels = ["지원내용", "지원 내용", "지원혜택", "지원 혜택", "지원규모", "지원 규모", "모집규모", "모집 규모", "선발규모", "선발 규모"]
-    v = first_line_after_label(lines, labels, max_next=2)
-    if v:
-        return clean(v)[:180]
-    for lab in labels:
-        m = re.search(re.escape(lab) + r"\s*[:：]?\s*(.{10,180})", text)
-        if m:
-            return clean(m.group(1))[:180]
-    return "공고 참조"
-
-
-def parse_biohub_detail(url: str, html: str) -> Optional[Dict[str, Any]]:
-    soup = BeautifulSoup(html, "html.parser")
-    # script/style/nav성 텍스트 제거
-    for tag in soup(["script", "style", "noscript"]):
-        tag.decompose()
-    raw_text = soup.get_text("\n", strip=True)
-    lines = [clean(x) for x in raw_text.splitlines() if clean(x)]
-    text = clean(raw_text)
-
-    if len(text) < 200:
-        return None
-    # 유효 상세 페이지 여부. 개인정보/신청폼만 있는 페이지를 방지한다.
-    if not any(k in text for k in ["신청기간", "모집기간", "접수기간", "신청 마감", "모집대상", "지원자격", "지원내용", "공고명"]):
-        return None
-
-    # choose_biohub_title은 실제 공고면 hidden input(name="title") 또는
-    # p.pop-cont-title에서 원본 공고명을 반환하고, 유령/빈 템플릿 페이지면
-    # 이 둘이 모두 없어 아래 placeholder를 반환한다. 따라서 placeholder가 곧
-    # "실제 공고가 아님" 신호이므로 그대로 버린다. (예전엔 여기에
-    # `and not any("공고"/"모집"/"프로그램" in text)` 예외를 뒀는데, 전역 메뉴에
-    # "모집"/"프로그램"이 항상 들어 있어 유령 페이지를 걸러내지 못했다.)
-    title = choose_biohub_title(soup)
-    if title == "서울바이오허브 공고":
-        return None
-
-    start, end = extract_biohub_period(lines, text)
-    budget = extract_biohub_budget(lines, text)
-    category = guess_biohub_category(title, text)
-    elig = elig_from_text(title, text[:3500])
-    biohub_item = normalize(
-        "biohub",
-        title,
-        "서울바이오허브",
-        category,
-        start,
-        end,
-        url,
-        budget=budget,
-        elig=elig,
-        raw={"collector": "biohub_direct", "text_head": text[:1200]},
-    )
-    mark_dates_unknown_if_needed(biohub_item, text, start_was_known=bool(start))
-    return biohub_item
-
-
-def discover_biohub_program_ids_from_list_html(html: str) -> List[Tuple[str, str]]:
-    """목록 페이지(supportManageListPage.do) HTML에서 실제 존재하는 (seq, gubun) 쌍을
-    전부 추출한다. 각 카드는 `supportManageViewPage('seq','gubun')` 형태의 JS 호출을
-    이미지 링크와 "신청하기" 버튼 두 곳에 중복으로 담고 있으므로, seq 기준으로 먼저
-    나온 것만 남긴다. gubun을 사이트가 알려주는 값을 그대로 쓰므로 gubun을 추측하거나
-    여러 값을 대입해볼 필요가 없다."""
-    seen: set = set()
-    pairs: List[Tuple[str, str]] = []
-    for m in re.finditer(r"supportManageViewPage\('(\d+)'\s*,\s*'(\w+)'\)", html):
-        seq, gubun = m.group(1), m.group(2)
-        if seq in seen:
-            continue
-        seen.add(seq)
-        pairs.append((seq, gubun))
-    return pairs
-
-
-def fetch_biohub_program_list(
-    base_url: str, timeout: int, page_size: int, list_url: Optional[str] = None
-) -> List[Tuple[str, str]]:
-    """목록 페이지를 POST로 요청해 (seq, gubun) 전체를 가져온다.
-
-    이 페이지는 서버에서 렌더링되어 반환되므로(클라이언트 JS 없이도 GET만으로 1페이지
-    분량은 보이지만), 게시판 폼의 miv_pageNo/miv_pageSize 파라미터를 그대로 POST로
-    보내면 페이지네이션 없이 한 번의 요청으로 원하는 만큼의 이력을 받을 수 있다.
-
-    `list_url`을 넘기면 그 URL을 그대로 쓴다 — 관리자 화면의 "소스 URL 재정의"
-    패널(server.py의 OVERRIDABLE_SOURCES)로 사이트 구조 변경에 대응할 수 있도록
-    하기 위함이다. 넘기지 않으면 base_url 기준 기본 경로를 사용한다.
-    """
-    url = clean(list_url) or f"{base_url}/front/supportManageReq/supportManageListPage.do"
-    r = SESSION.post(url, data={"miv_pageNo": "1", "miv_pageSize": str(page_size)}, timeout=timeout)
-    r.raise_for_status()
-    if not r.encoding or r.encoding.lower() == "iso-8859-1":
-        r.encoding = r.apparent_encoding
-    return discover_biohub_program_ids_from_list_html(r.text)
-
-
-def collect_biohub_direct(bcfg: Dict[str, Any], common: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """서울바이오허브 전용 수집기.
-
-    더 이상 collect_all()이 평시 수집에 쓰지 않는다(_collect_via_stored_recipe()로
-    대체됨) — 만일을 위해 코드만 남겨뒀다.
-
-    일반 게시판 크롤러와 달리 서울바이오허브는 상세 URL인
-    supportManageView.do?gubun=..&seq=.. 페이지를 직접 파싱한다.
-    1) 목록 페이지(supportManageListPage.do)를 POST로 조회해 실제 존재하는
-       (seq, gubun) 쌍을 전부 가져온다. seq를 추측하지 않고 gubun도 사이트가
-       알려주는 값을 그대로 쓰므로, 존재하지 않는 seq에 대한 유령 페이지나
-       잘못된 gubun 조합으로 인한 낭비/오탐이 원천적으로 발생하지 않는다.
-    2) 위 방식이 실패하면(사이트 구조 변경 등) config의 seed_urls로 보완한다.
-       (예전에는 여기서 seq 범위를 추측 스캔하는 3단계가 더 있었으나, 1)이
-       실제 목록을 정확히 가져오게 되면서 추측 스캔은 항상 유령 페이지만
-       만들어내는 순수 손해였으므로 완전히 제거했다.)
-    """
-    if not bcfg.get("enabled", False):
-        raise RuntimeError("비활성화됨")
-    base_url = clean(bcfg.get("base_url")) or "https://www.seoulbiohub.kr"
-    timeout = common.get("timeout_sec", 20)
-    max_items = resolve_max_items(common.get("max_items_per_source", 80))
-    delay = float(bcfg.get("detail_delay_sec", 0.06))
-
-    if common.get("respect_robots", True):
-        probe = f"{base_url}/front/supportManageReq/supportManageView.do"
-        if not robots_allows(probe):
-            raise PermissionError("robots.txt 차단")
-
-    candidates: List[str] = []
-    seen = set()
-
-    def add_url(u: str) -> None:
-        u = clean(u).replace("&amp;", "&")
-        if not u:
-            return
-        u = urljoin(base_url, u)
-        if "supportManageView.do" not in u:
-            return
-        if u not in seen:
-            seen.add(u)
-            candidates.append(u)
-
-    # 1) 목록 페이지를 POST로 조회해 (seq, gubun) 쌍을 가져온다. list_url이 설정되어
-    #    있으면 그 값을 쓰고(관리자 URL 재정의 대응), 없으면 base_url 기준 기본
-    #    경로를 쓴다. 요청이 막히면(예: 사이트가 구조를 바꿔 이 엔드포인트가
-    #    사라진 경우) 실패만 기록하고 아래 fallback 단계로 넘어간다.
-    list_url = clean(bcfg.get("list_url") or bcfg.get("list_urls", [None])[0] or "") or None
-    effective_list_url = list_url or f"{base_url}/front/supportManageReq/supportManageListPage.do"
-    try:
-        if not (common.get("respect_robots", True) and not robots_allows(effective_list_url)):
-            pairs = fetch_biohub_program_list(
-                base_url, timeout,
-                page_size=max_items,
-                list_url=list_url,
-            )
-            for seq, gubun in pairs:
-                add_url(f"{base_url}/front/supportManageReq/supportManageView.do?seq={seq}&gubun={gubun}")
-    except Exception:
-        pass
-
-    # 2) 목록 조회가 아무것도 못 찾았을 때만 seed_urls로 보완한다.
-    if not candidates:
-        for u in bcfg.get("seed_urls") or []:
-            add_url(u)
-
-    out: List[Dict[str, Any]] = []
-    used_title_keys = set()
-
-    for url in candidates:
-        try:
-            r = SESSION.get(url, timeout=timeout)
-            if r.status_code >= 400:
-                continue
-            if not r.encoding or r.encoding.lower() == "iso-8859-1":
-                r.encoding = r.apparent_encoding
-            item = parse_biohub_detail(url, r.text)
-            if not item:
-                continue
-            key = re.sub(r"[\s\[\](){}<>〔〕·,._-]", "", item["title"])[:54]
-            if key in used_title_keys:
-                continue
-            used_title_keys.add(key)
-            out.append(item)
-            if len(out) >= max_items:
-                break
-            if delay:
-                time.sleep(delay)
-        except Exception:
-            continue
-
-    if not out:
-        raise RuntimeError("서울바이오허브 0건: 목록 페이지(list_page) 또는 seed_urls 확인 필요")
     return out
 
 
@@ -1565,19 +954,46 @@ def load_sample_items() -> List[Dict[str, Any]]:
 
 
 def _collect_via_stored_recipe(source_id: str, common: Dict[str, Any], cap: int) -> List[Dict[str, Any]]:
-    """kstartup/kddf/nrf의 평시 수집 경로 — 예전에 검증해둔 손으로 쓴 파서 대신, 이미
-    저장된 레시피를 선택자만으로 결정적으로 재실행한다(LLM 호출 없음). 레시피가 없거나
-    실행이 깨지면 여기서 예외를 던져 호출부가 "오류"로 기록하게 하고, 그 뒤 이상 감지
-    로직이 recover_source_via_recipe()로 자동 복구를 시도한다 — 손으로 쓴 파서는 그
-    복구 경로에서도 더 이상 쓰지 않는다(collector.py의 collect_kstartup/collect_kddf/
-    collect_nrf_iris 함수 자체는 참고용으로 남겨뒀을 뿐, collect_all()이 더 이상
-    호출하지 않는다)."""
+    """kstartup/kddf/nrf/biohub_direct의 유일한 수집 경로 — 저장된 레시피를 선택자만으로
+    결정적으로 재실행한다(LLM 호출 없음). 이 소스들에는 더 이상 손으로 쓴 파서가 없다 —
+    레시피가 없거나 실행이 깨지면 여기서 예외를 던진다. 호출부는 이 예외를
+    _run_recipe_source_with_recovery()로 감싸 즉시 복구를 시도한다."""
     import recipe_engine
 
     stored = database.get_source_recipe(source_id)
     if not stored:
         raise RuntimeError("레시피 없음")
     return recipe_engine.run_recipe(source_id, stored["recipe"], common)[:cap]
+
+
+def _run_recipe_source_with_recovery(
+    source_id: str,
+    common: Dict[str, Any],
+    cap: int,
+    list_url: Optional[str],
+    triggering_user_id: Optional[str],
+) -> Tuple[List[Dict[str, Any]], bool]:
+    """레시피 기반 소스(kstartup/kddf/nrf/biohub_direct/커스텀 소스) 공통 수집 경로.
+
+    먼저 저장된 레시피를 재시도까지 포함해 실행해본다(타임아웃 등 일시적 오류는 여기서
+    흡수됨). run_recipe()가 그래도 예외를 던진다는 것 자체가 "레시피가 더 이상 안 맞는다"는
+    직접적인 신호이므로, 과거 평균 대비 급감 여부를 통계로 판단하는 이상감지
+    (flag_source_anomalies)가 다음 실행까지 기다릴 이유가 없다 — 바로
+    recover_source_via_recipe()로 즉시 복구를 시도한다(반환값의 두 번째 항목이 복구
+    여부). robots 차단(PermissionError)은 재시도·복구 모두 결과가 같으므로 그대로
+    다시 던진다. 복구도 실패하면 원래 예외를 그대로 던져 호출부가 기존과 동일하게
+    "오류"로 기록하게 한다."""
+    try:
+        return _run_with_retry(lambda: _collect_via_stored_recipe(source_id, common, cap)), False
+    except PermissionError:
+        raise
+    except Exception:
+        if not list_url:
+            raise
+        recovered = recover_source_via_recipe(source_id, list_url, common, triggering_user_id)
+        if not recovered:
+            raise
+        return recovered[:cap], True
 
 
 # collect_all()에서 소스 하나가 실패했을 때, 재시도로도 못 살아나면 이번 실행의
@@ -1681,10 +1097,15 @@ def collect_all(write_db: bool = True, triggering_user_id: Optional[str] = None)
     cap = resolve_max_items(common.get("max_items_per_source", 60))
     board_list_urls: Dict[str, str] = {}
     # 레시피 경로(_collect_via_stored_recipe/recipe_engine.run_recipe())로 수집된 소스 id들 —
-    # 자금성 판정(funding_classifier)은 이 소스들에만 시도한다. 손으로 쓴 파서를 쓰는 소스는
-    # classify_field_map을 채울 방법이 없어 대상에서 자연히 빠진다(수동 on/off 스위치가 아니라
-    # 레시피가 그 필드를 실제로 채웠는지에 따라 결정됨).
-    recipe_source_ids: List[str] = []
+    # 자금성 판정(funding_classifier)은 이 소스들 전부에 예외 없이 적용된다(run_recipe()가
+    # 항목마다 상세 페이지 텍스트를 항상 채우므로). 손으로 쓴 파서를 쓰는 소스는 이 텍스트가
+    # 애초에 없어 대상에서 자연히 빠진다.
+    classify_source_ids: List[str] = []
+    # _run_recipe_source_with_recovery()로 (성공/실패 무관) 즉시 복구를 이미 시도한 소스
+    # id들 — 아래 flag_source_anomalies() 기반 이상감지 루프가 같은 실행 안에서 똑같은
+    # 레시피 재발견을 또 시도하지 않도록 걸러내는 데 쓴다(안 그러면 진짜로 깨진 소스는
+    # LLM 재발견 호출이 실행마다 두 번씩 나간다).
+    recipe_managed_ids: Set[str] = set()
 
     # Bizinfo and routed institutional notices.
     bcfg = _apply_source_override(cfg.get("bizinfo", {}), "bizinfo", overrides)
@@ -1694,6 +1115,8 @@ def collect_all(write_db: bool = True, triggering_user_id: Optional[str] = None)
             for sid in ["bizinfo", "biohub", "khidi"]:
                 items = routed.get(sid, [])[:cap]
                 run.record(sid, items, "정상" if items or sid == "bizinfo" else "0건")
+                if items:
+                    classify_source_ids.append(sid)
         except Exception as e:
             # Keep the error in the admin detail, but do not create extra zero-count
             # routed source rows such as "서울바이오허브 대기 0".  Direct
@@ -1722,11 +1145,20 @@ def collect_all(write_db: bool = True, triggering_user_id: Optional[str] = None)
     kstartup_enabled = kcfg.get("enabled", False)
     if kstartup_enabled:
         try:
-            items = _run_with_retry(lambda: _collect_via_stored_recipe("kstartup", common, cap))
-            run.record("kstartup", items, "정상", name=kcfg.get("name"), method="레시피")
-            recipe_source_ids.append("kstartup")
+            items, recovered = _run_recipe_source_with_recovery(
+                "kstartup", common, cap, board_list_urls.get("kstartup"), triggering_user_id
+            )
+            state = "레시피로 복구됨" if recovered else "정상"
+            run.record("kstartup", items, state, name=kcfg.get("name"), method="레시피")
+            classify_source_ids.append("kstartup")
+            recipe_managed_ids.add("kstartup")
+            if recovered:
+                run.sources["kstartup"]["anomaly_note"] = (
+                    f"레시피 실행이 실패해 즉시 재발견으로 자동 복구되었습니다 ({len(items)}건)."
+                )
         except Exception as e:
             run.record("kstartup", [], "오류", e, name=kcfg.get("name"))
+            recipe_managed_ids.add("kstartup")
     else:
         run.record("kstartup", [], "비활성화", name=kcfg.get("name"))
 
@@ -1740,22 +1172,29 @@ def collect_all(write_db: bool = True, triggering_user_id: Optional[str] = None)
         if not board_cfg.get("enabled", False):
             run.record(sid, [], "비활성화", name=board_cfg.get("name"))
             continue
+        recipe_sid_default_name = {
+            "biohub_direct": "서울바이오허브(직접)",
+            "nrf": "한국연구재단",
+            "kddf": "국가신약개발사업단",
+        }.get(sid)
+        if recipe_sid_default_name is not None:
+            recipe_managed_ids.add(sid)
         try:
-            if sid == "biohub_direct":
-                items = _run_with_retry(lambda: _collect_via_stored_recipe(sid, common, cap))
-                run.record(sid, items, "정상", name=board_cfg.get("name") or "서울바이오허브(직접)", method="레시피")
-                recipe_source_ids.append(sid)
-            elif sid == "nrf":
-                items = _run_with_retry(lambda: _collect_via_stored_recipe(sid, common, cap))
-                run.record(sid, items, "정상", name=board_cfg.get("name") or "한국연구재단", method="레시피")
-                recipe_source_ids.append(sid)
-            elif sid == "kddf":
-                items = _run_with_retry(lambda: _collect_via_stored_recipe(sid, common, cap))
-                run.record(sid, items, "정상", name=board_cfg.get("name") or "국가신약개발사업단", method="레시피")
-                recipe_source_ids.append(sid)
+            if recipe_sid_default_name is not None:
+                items, recovered = _run_recipe_source_with_recovery(
+                    sid, common, cap, board_list_urls.get(sid), triggering_user_id
+                )
+                state = "레시피로 복구됨" if recovered else "정상"
+                run.record(sid, items, state, name=board_cfg.get("name") or recipe_sid_default_name, method="레시피")
+                classify_source_ids.append(sid)
+                if recovered:
+                    run.sources[sid]["anomaly_note"] = (
+                        f"레시피 실행이 실패해 즉시 재발견으로 자동 복구되었습니다 ({len(items)}건)."
+                    )
             elif sid == "khidi_direct":
                 items = _run_with_retry(lambda: collect_khidi_direct(board_cfg, common, triggering_user_id))[:cap]
                 run.record(sid, items, "정상", name=board_cfg.get("name") or "보건산업진흥원/KHIDI", method="전용 파서(API)")
+                classify_source_ids.append(sid)
             else:
                 items = _run_with_retry(lambda: collect_board(sid, board_cfg, common))[:cap]
                 run.record(sid, items, "정상", name=board_cfg.get("name"), method="게시판")
@@ -1765,11 +1204,8 @@ def collect_all(write_db: bool = True, triggering_user_id: Optional[str] = None)
             run.record(sid, [], "오류", e, name=board_cfg.get("name"), method="게시판")
 
     # 관리자가 URL만으로 등록한 커스텀 소스 — 손으로 쓴 수집기 없이 저장된 레시피만으로
-    # 수집한다(선택자만으로 결정적으로 실행되므로 LLM 호출이 없다). board_list_urls에
-    # 등록해두면, 아래 이상 감지/복구 루프가 다른 게시판 소스와 똑같이 이 소스도
-    # 다뤄준다(레시피가 깨지면 재발견까지 자동으로 시도).
-    import recipe_engine  # 지연 임포트: recipe_engine이 collector를 임포트하므로 순환 방지
-
+    # 수집한다(선택자만으로 결정적으로 실행되므로 LLM 호출이 없다). _run_recipe_source_with_recovery()가
+    # 다른 레시피 기반 소스와 똑같이 이 소스도 다뤄준다(레시피가 깨지면 즉시 재발견을 시도).
     for cs in database.get_enabled_custom_sources():
         sid = cs["id"]
         board_list_urls[sid] = cs["list_url"]
@@ -1777,10 +1213,18 @@ def collect_all(write_db: bool = True, triggering_user_id: Optional[str] = None)
         if not stored:
             run.record(sid, [], "레시피 없음", name=cs["name"], method="레시피")
             continue
+        recipe_managed_ids.add(sid)
         try:
-            items = _run_with_retry(lambda: recipe_engine.run_recipe(sid, stored["recipe"], common))[:cap]
-            run.record(sid, items, "정상", name=cs["name"], method="레시피")
-            recipe_source_ids.append(sid)
+            items, recovered = _run_recipe_source_with_recovery(
+                sid, common, cap, cs["list_url"], triggering_user_id
+            )
+            state = "레시피로 복구됨" if recovered else "정상"
+            run.record(sid, items, state, name=cs["name"], method="레시피")
+            classify_source_ids.append(sid)
+            if recovered:
+                run.sources[sid]["anomaly_note"] = (
+                    f"레시피 실행이 실패해 즉시 재발견으로 자동 복구되었습니다 ({len(items)}건)."
+                )
         except PermissionError as e:
             run.record(sid, [], "차단(robots)", e, name=cs["name"], method="레시피")
         except Exception as e:
@@ -1801,6 +1245,12 @@ def collect_all(write_db: bool = True, triggering_user_id: Optional[str] = None)
         for sid, entry in run.sources.items():
             if not entry.get("anomaly") or sid not in board_list_urls:
                 continue
+            if sid in recipe_managed_ids:
+                # 위에서 이미 _run_recipe_source_with_recovery()로 즉시 복구를 시도했다
+                # (성공했으면 예외 없이 "정상"/"레시피로 복구됨"으로 기록돼 있어 여기
+                # anomaly 조건에 애초에 안 걸리고, 실패했으면 다시 시도해도 똑같이
+                # 실패할 뿐이다) — 같은 실행에서 LLM 재발견을 두 번 태우지 않는다.
+                continue
             recovered = recover_source_via_recipe(sid, board_list_urls[sid], common, triggering_user_id)
             if not recovered:
                 continue
@@ -1811,8 +1261,8 @@ def collect_all(write_db: bool = True, triggering_user_id: Optional[str] = None)
             entry["anomaly"] = False
             entry["anomaly_note"] = f"기존 수집이 실패해 레시피 기반으로 자동 복구되었습니다 ({len(recovered)}건)."
             recovered_any = True
-            if sid not in recipe_source_ids:
-                recipe_source_ids.append(sid)
+            if sid not in classify_source_ids:
+                classify_source_ids.append(sid)
         if recovered_any:
             run.items = merge_duplicate_notices(run.items)
 
@@ -1836,19 +1286,17 @@ def collect_all(write_db: bool = True, triggering_user_id: Optional[str] = None)
         # (FK 존재 체크에 걸림). 그래서 반드시 run.items(merge 이후, upsert 이후)
         # 에서 해당 소스 유래 항목만 뽑아 써야 한다.
         #
-        # 레시피로 수집된 모든 소스에 대해 시도한다 — 소스별 on/off 스위치가 아니라, 그
-        # 소스의 저장된 레시피가 classify_field_map을 실제로 찾아뒀는지에 따라 자연히
-        # 갈린다. 아직 못 찾은 소스(레시피가 이 필드 없이 예전에 발견됐거나, 사이트에
-        # 애초에 구조화된 필드가 없어 discover가 null로 남긴 경우)는 제목만으로 판정하면
-        # 근거 부족으로 거의 다 exclude되어 그 소스 공고가 화면에서 대량으로 사라지는
-        # 부작용이 생기므로, classify_field_map이 없는 소스는 여기서 아예 건너뛴다.
-        for sid in recipe_source_ids:
-            stored_recipe = database.get_source_recipe(sid)
-            if not stored_recipe or not (stored_recipe["recipe"].get("classify_field_map")):
-                continue
+        # 자금성 판정은 classify_source_ids에 있는 모든 소스에 예외 없이 적용한다 —
+        # 소스별 on/off 스위치가 없다. 레시피 소스는 run_recipe()가, bizinfo/biohub/khidi
+        # (라우팅)는 collect_bizinfo()가, khidi_direct는 collect_khidi_direct()가 각자
+        # raw["classify_text"]를 이미 채워뒀으므로(수집 흐름에 내재된 동작), 여기서는
+        # 소스별로 더 걸러낼 조건이 없다. g2b는 이 목록에 없다 — 입찰공고는 스타트업
+        # 자금 지원과 판정 기준 자체가 달라 이 분류기의 대상이 아니다.
+        for sid in classify_source_ids:
+            canonical_sid = database.canonical_source_id(sid)
             final_items = [
                 it for it in run.items
-                if any(s.get("id") == sid for s in (it.get("sources") or []))
+                if any(s.get("id") == canonical_sid for s in (it.get("sources") or []))
             ]
             if not final_items:
                 continue
