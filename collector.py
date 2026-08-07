@@ -1208,9 +1208,10 @@ def collect_all(write_db: bool = True, triggering_user_id: Optional[str] = None)
         # 소스별로 더 걸러낼 조건이 없다. g2b는 이 목록에 없다 — 입찰공고는 스타트업
         # 자금 지원과 판정 기준 자체가 달라 이 분류기의 대상이 아니다.
         for sid in classify_source_ids:
+            canonical_sid = database.canonical_source_id(sid)
             final_items = [
                 it for it in run.items
-                if any(s.get("id") == sid for s in (it.get("sources") or []))
+                if any(s.get("id") == canonical_sid for s in (it.get("sources") or []))
             ]
             if not final_items:
                 continue
