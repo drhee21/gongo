@@ -584,10 +584,6 @@ class Handler(BaseHTTPRequestHandler):
                     self.send_json({"ok": False, "error": "관리자 권한이 필요합니다"}, status=403)
                     return
                 data = self.read_json()
-                mode = data.get("mode")
-                if mode not in ("daily", "interval"):
-                    self.send_json({"ok": False, "error": "mode는 daily 또는 interval이어야 합니다"}, status=400)
-                    return
                 time_str = str(data.get("time") or "")
                 if not re.match(r"^([01]\d|2[0-3]):([0-5]\d)$", time_str):
                     self.send_json({"ok": False, "error": "time은 HH:MM 형식이어야 합니다"}, status=400)
@@ -597,19 +593,18 @@ class Handler(BaseHTTPRequestHandler):
                     self.send_json({"ok": False, "error": "days가 올바르지 않습니다"}, status=400)
                     return
                 try:
-                    interval_hours = int(data.get("interval_hours"))
+                    interval_weeks = int(data.get("interval_weeks"))
                 except (TypeError, ValueError):
-                    self.send_json({"ok": False, "error": "interval_hours는 정수여야 합니다"}, status=400)
+                    self.send_json({"ok": False, "error": "interval_weeks는 정수여야 합니다"}, status=400)
                     return
-                if not (1 <= interval_hours <= 168):
-                    self.send_json({"ok": False, "error": "interval_hours는 1~168 사이여야 합니다"}, status=400)
+                if not (1 <= interval_weeks <= 52):
+                    self.send_json({"ok": False, "error": "interval_weeks는 1~52 사이여야 합니다"}, status=400)
                     return
                 cfg = {
                     "enabled": bool(data.get("enabled")),
-                    "mode": mode,
                     "time": time_str,
                     "days": days,
-                    "interval_hours": interval_hours,
+                    "interval_weeks": interval_weeks,
                     # 스케줄러가 자동 실행될 때 이 값을 triggering_user_id로 써서, 그 시점에
                     # 활성이던 이 관리자의 키를 쓰게 한다(scheduler.py 참고) — 매번 "가장 최근에
                     # 승격된 관리자"로 대체되는 대신, 일정을 실제로 설정한 사람의 키가 쓰인다.

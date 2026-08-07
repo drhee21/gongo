@@ -424,14 +424,6 @@ function renderAuthUI(){
 }
 
 // ── 자동 수집 일정(관리자) ──
-function updateSchedulerModeFields(){
-  const form = $('#schedulerForm');
-  if(!form) return;
-  const mode = form.querySelector('input[name="mode"]:checked')?.value;
-  $('#schedulerDailyFields')?.classList.toggle('hidden', mode !== 'daily');
-  $('#schedulerIntervalFields')?.classList.toggle('hidden', mode !== 'interval');
-}
-
 async function loadSchedulerConfig(){
   const form = $('#schedulerForm');
   const statusEl = $('#schedulerStatus');
@@ -440,13 +432,11 @@ async function loadSchedulerConfig(){
     const res = await api('/api/admin/scheduler-config');
     const cfg = res.config || {};
     form.querySelector('#schedulerEnabled').checked = !!cfg.enabled;
-    form.querySelector(`input[name="mode"][value="${cfg.mode === 'interval' ? 'interval' : 'daily'}"]`).checked = true;
     form.querySelector('#schedulerTime').value = cfg.time || '03:00';
     form.querySelectorAll('input[name="days"]').forEach(cb => {
       cb.checked = (cfg.days || []).includes(cb.value);
     });
-    form.querySelector('#schedulerIntervalHours').value = cfg.interval_hours || 6;
-    updateSchedulerModeFields();
+    form.querySelector('#schedulerIntervalWeeks').value = cfg.interval_weeks || 1;
     if(statusEl){
       const parts = [];
       parts.push(cfg.enabled ? t('schedulerInUse') : t('schedulerNotInUse'));
@@ -457,20 +447,15 @@ async function loadSchedulerConfig(){
   }catch(err){ if(statusEl) statusEl.textContent = err.message; }
 }
 
-$('#schedulerForm')?.addEventListener('change', (e)=>{
-  if(e.target.name === 'mode') updateSchedulerModeFields();
-});
-
 $('#schedulerForm')?.addEventListener('submit', async (e)=>{
   e.preventDefault();
   const form = e.currentTarget;
   const fd = new FormData(form);
   const body = {
     enabled: form.querySelector('#schedulerEnabled').checked,
-    mode: fd.get('mode'),
     time: fd.get('time'),
     days: fd.getAll('days'),
-    interval_hours: Number(fd.get('interval_hours')),
+    interval_weeks: Number(fd.get('interval_weeks')),
   };
   try{
     await api('/api/admin/scheduler-config', {method:'POST', body:JSON.stringify(body)});

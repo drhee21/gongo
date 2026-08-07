@@ -222,10 +222,6 @@
         </div>
         <form id="schedulerForm" class="form-grid">
           <label class="checkbox wide"><input type="checkbox" name="enabled" id="schedulerEnabled" /> <span data-i18n="schedulerEnabledLabel">자동 수집 사용</span></label>
-          <div class="wide scheduler-mode-row">
-            <label><input type="radio" name="mode" value="daily" checked /> <span data-i18n="schedulerModeDaily">매일 지정 시간에</span></label>
-            <label><input type="radio" name="mode" value="interval" /> <span data-i18n="schedulerModeInterval">일정 시간마다</span></label>
-          </div>
           <div class="wide" id="schedulerDailyFields">
             <label><span data-i18n="timeLabel">시간</span><input type="time" name="time" id="schedulerTime" value="03:00" /></label>
             <div class="scheduler-days">
@@ -238,8 +234,8 @@
               <label><input type="checkbox" name="days" value="sun" checked /> <span data-i18n="daySun">일</span></label>
             </div>
           </div>
-          <div class="wide hidden" id="schedulerIntervalFields">
-            <label><span data-i18n="intervalHoursLabel">주기(시간)</span><input type="number" name="interval_hours" id="schedulerIntervalHours" min="1" max="168" value="6" /></label>
+          <div class="wide" id="schedulerIntervalFields">
+            <label><span data-i18n="intervalHoursLabel">반복 주기(주)</span><input type="number" name="interval_weeks" id="schedulerIntervalWeeks" min="1" max="52" value="1" /></label>
           </div>
           <p class="wide meta scheduler-key-note" data-i18n="schedulerKeyNote">이 일정을 저장하면 그 시점부터 자동 수집은 저장한 계정 본인의 LLM API 키를 사용합니다 — 저장 전에 "회사 정보"에서 본인 키가 등록되어 있는지 확인하세요.</p>
           <div class="wide form-actions">
