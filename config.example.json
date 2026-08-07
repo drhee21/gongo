@@ -14,7 +14,6 @@
   },
   "kstartup": {
     "enabled": true,
-    "method": "html",
     "list_url": "https://www.k-startup.go.kr/web/contents/bizpbanc-ongoing.do",
     "_note": "API 키 없이 K-Startup 모집중 웹페이지 HTML을 직접 크롤링합니다."
   },
@@ -46,8 +45,7 @@
       "list_url": "https://www.iris.go.kr/contents/retrieveBsnsAncmListView.do?sorgnId=10001",
       "base_url": "https://www.iris.go.kr",
       "org": "한국연구재단",
-      "category": "R&D",
-      "method": "iris"
+      "category": "R&D"
     },
     "kddf": {
       "enabled": true,
@@ -61,17 +59,9 @@
       "enabled": true,
       "name": "서울바이오허브(직접)",
       "base_url": "https://www.seoulbiohub.kr",
-      "list_url": "https://www.seoulbiohub.kr/front/supportManageReq/supportManageListPage.do?miv_pageNo=1&miv_pageSize=80",
+      "list_url": "https://www.seoulbiohub.kr/front/supportManageReq/supportManageListPage.do",
       "org": "서울바이오허브",
       "category": "바이오·헬스",
-      "seed_urls": [
-        "https://www.seoulbiohub.kr/front/supportManageReq/supportManageView.do?gubun=08&seq=763",
-        "https://www.seoulbiohub.kr/front/supportManageReq/supportManageView.do?gubun=14&seq=759",
-        "https://www.seoulbiohub.kr/front/supportManageReq/supportManageView.do?gubun=14&seq=751",
-        "https://www.seoulbiohub.kr/front/supportManageReq/supportManageView.do?gubun=14&seq=746",
-        "https://www.seoulbiohub.kr/front/supportManageReq/supportManageView.do?gubun=09&seq=736",
-        "https://www.seoulbiohub.kr/front/supportManageReq/supportManageView.do?gubun=04&seq=714"
-      ],
       "detail_delay_sec": 0.03
     },
     "khidi_direct": {
