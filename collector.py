@@ -956,15 +956,44 @@ def load_sample_items() -> List[Dict[str, Any]]:
 def _collect_via_stored_recipe(source_id: str, common: Dict[str, Any], cap: int) -> List[Dict[str, Any]]:
     """kstartup/kddf/nrf/biohub_direct의 유일한 수집 경로 — 저장된 레시피를 선택자만으로
     결정적으로 재실행한다(LLM 호출 없음). 이 소스들에는 더 이상 손으로 쓴 파서가 없다 —
-    레시피가 없거나 실행이 깨지면 여기서 예외를 던져 호출부가 "오류"로 기록하게 하고,
-    그 뒤 이상 감지 로직이 recover_source_via_recipe()로 자동 복구(레시피 재발견)를
-    시도한다."""
+    레시피가 없거나 실행이 깨지면 여기서 예외를 던진다. 호출부는 이 예외를
+    _run_recipe_source_with_recovery()로 감싸 즉시 복구를 시도한다."""
     import recipe_engine
 
     stored = database.get_source_recipe(source_id)
     if not stored:
         raise RuntimeError("레시피 없음")
     return recipe_engine.run_recipe(source_id, stored["recipe"], common)[:cap]
+
+
+def _run_recipe_source_with_recovery(
+    source_id: str,
+    common: Dict[str, Any],
+    cap: int,
+    list_url: Optional[str],
+    triggering_user_id: Optional[str],
+) -> Tuple[List[Dict[str, Any]], bool]:
+    """레시피 기반 소스(kstartup/kddf/nrf/biohub_direct/커스텀 소스) 공통 수집 경로.
+
+    먼저 저장된 레시피를 재시도까지 포함해 실행해본다(타임아웃 등 일시적 오류는 여기서
+    흡수됨). run_recipe()가 그래도 예외를 던진다는 것 자체가 "레시피가 더 이상 안 맞는다"는
+    직접적인 신호이므로, 과거 평균 대비 급감 여부를 통계로 판단하는 이상감지
+    (flag_source_anomalies)가 다음 실행까지 기다릴 이유가 없다 — 바로
+    recover_source_via_recipe()로 즉시 복구를 시도한다(반환값의 두 번째 항목이 복구
+    여부). robots 차단(PermissionError)은 재시도·복구 모두 결과가 같으므로 그대로
+    다시 던진다. 복구도 실패하면 원래 예외를 그대로 던져 호출부가 기존과 동일하게
+    "오류"로 기록하게 한다."""
+    try:
+        return _run_with_retry(lambda: _collect_via_stored_recipe(source_id, common, cap)), False
+    except PermissionError:
+        raise
+    except Exception:
+        if not list_url:
+            raise
+        recovered = recover_source_via_recipe(source_id, list_url, common, triggering_user_id)
+        if not recovered:
+            raise
+        return recovered[:cap], True
 
 
 # collect_all()에서 소스 하나가 실패했을 때, 재시도로도 못 살아나면 이번 실행의
@@ -1047,6 +1076,11 @@ def collect_all(write_db: bool = True, triggering_user_id: Optional[str] = None)
     # 항목마다 상세 페이지 텍스트를 항상 채우므로). 손으로 쓴 파서를 쓰는 소스는 이 텍스트가
     # 애초에 없어 대상에서 자연히 빠진다.
     classify_source_ids: List[str] = []
+    # _run_recipe_source_with_recovery()로 (성공/실패 무관) 즉시 복구를 이미 시도한 소스
+    # id들 — 아래 flag_source_anomalies() 기반 이상감지 루프가 같은 실행 안에서 똑같은
+    # 레시피 재발견을 또 시도하지 않도록 걸러내는 데 쓴다(안 그러면 진짜로 깨진 소스는
+    # LLM 재발견 호출이 실행마다 두 번씩 나간다).
+    recipe_managed_ids: Set[str] = set()
 
     # Bizinfo and routed institutional notices.
     bcfg = _apply_source_override(cfg.get("bizinfo", {}), "bizinfo", overrides)
@@ -1086,11 +1120,20 @@ def collect_all(write_db: bool = True, triggering_user_id: Optional[str] = None)
     kstartup_enabled = kcfg.get("enabled", False)
     if kstartup_enabled:
         try:
-            items = _run_with_retry(lambda: _collect_via_stored_recipe("kstartup", common, cap))
-            run.record("kstartup", items, "정상", name=kcfg.get("name"), method="레시피")
+            items, recovered = _run_recipe_source_with_recovery(
+                "kstartup", common, cap, board_list_urls.get("kstartup"), triggering_user_id
+            )
+            state = "레시피로 복구됨" if recovered else "정상"
+            run.record("kstartup", items, state, name=kcfg.get("name"), method="레시피")
             classify_source_ids.append("kstartup")
+            recipe_managed_ids.add("kstartup")
+            if recovered:
+                run.sources["kstartup"]["anomaly_note"] = (
+                    f"레시피 실행이 실패해 즉시 재발견으로 자동 복구되었습니다 ({len(items)}건)."
+                )
         except Exception as e:
             run.record("kstartup", [], "오류", e, name=kcfg.get("name"))
+            recipe_managed_ids.add("kstartup")
     else:
         run.record("kstartup", [], "비활성화", name=kcfg.get("name"))
 
@@ -1104,19 +1147,25 @@ def collect_all(write_db: bool = True, triggering_user_id: Optional[str] = None)
         if not board_cfg.get("enabled", False):
             run.record(sid, [], "비활성화", name=board_cfg.get("name"))
             continue
+        recipe_sid_default_name = {
+            "biohub_direct": "서울바이오허브(직접)",
+            "nrf": "한국연구재단",
+            "kddf": "국가신약개발사업단",
+        }.get(sid)
+        if recipe_sid_default_name is not None:
+            recipe_managed_ids.add(sid)
         try:
-            if sid == "biohub_direct":
-                items = _run_with_retry(lambda: _collect_via_stored_recipe(sid, common, cap))
-                run.record(sid, items, "정상", name=board_cfg.get("name") or "서울바이오허브(직접)", method="레시피")
+            if recipe_sid_default_name is not None:
+                items, recovered = _run_recipe_source_with_recovery(
+                    sid, common, cap, board_list_urls.get(sid), triggering_user_id
+                )
+                state = "레시피로 복구됨" if recovered else "정상"
+                run.record(sid, items, state, name=board_cfg.get("name") or recipe_sid_default_name, method="레시피")
                 classify_source_ids.append(sid)
-            elif sid == "nrf":
-                items = _run_with_retry(lambda: _collect_via_stored_recipe(sid, common, cap))
-                run.record(sid, items, "정상", name=board_cfg.get("name") or "한국연구재단", method="레시피")
-                classify_source_ids.append(sid)
-            elif sid == "kddf":
-                items = _run_with_retry(lambda: _collect_via_stored_recipe(sid, common, cap))
-                run.record(sid, items, "정상", name=board_cfg.get("name") or "국가신약개발사업단", method="레시피")
-                classify_source_ids.append(sid)
+                if recovered:
+                    run.sources[sid]["anomaly_note"] = (
+                        f"레시피 실행이 실패해 즉시 재발견으로 자동 복구되었습니다 ({len(items)}건)."
+                    )
             elif sid == "khidi_direct":
                 items = _run_with_retry(lambda: collect_khidi_direct(board_cfg, common, triggering_user_id))[:cap]
                 run.record(sid, items, "정상", name=board_cfg.get("name") or "보건산업진흥원/KHIDI", method="전용 파서(API)")
@@ -1130,11 +1179,8 @@ def collect_all(write_db: bool = True, triggering_user_id: Optional[str] = None)
             run.record(sid, [], "오류", e, name=board_cfg.get("name"), method="게시판")
 
     # 관리자가 URL만으로 등록한 커스텀 소스 — 손으로 쓴 수집기 없이 저장된 레시피만으로
-    # 수집한다(선택자만으로 결정적으로 실행되므로 LLM 호출이 없다). board_list_urls에
-    # 등록해두면, 아래 이상 감지/복구 루프가 다른 게시판 소스와 똑같이 이 소스도
-    # 다뤄준다(레시피가 깨지면 재발견까지 자동으로 시도).
-    import recipe_engine  # 지연 임포트: recipe_engine이 collector를 임포트하므로 순환 방지
-
+    # 수집한다(선택자만으로 결정적으로 실행되므로 LLM 호출이 없다). _run_recipe_source_with_recovery()가
+    # 다른 레시피 기반 소스와 똑같이 이 소스도 다뤄준다(레시피가 깨지면 즉시 재발견을 시도).
     for cs in database.get_enabled_custom_sources():
         sid = cs["id"]
         board_list_urls[sid] = cs["list_url"]
@@ -1142,10 +1188,18 @@ def collect_all(write_db: bool = True, triggering_user_id: Optional[str] = None)
         if not stored:
             run.record(sid, [], "레시피 없음", name=cs["name"], method="레시피")
             continue
+        recipe_managed_ids.add(sid)
         try:
-            items = _run_with_retry(lambda: recipe_engine.run_recipe(sid, stored["recipe"], common))[:cap]
-            run.record(sid, items, "정상", name=cs["name"], method="레시피")
+            items, recovered = _run_recipe_source_with_recovery(
+                sid, common, cap, cs["list_url"], triggering_user_id
+            )
+            state = "레시피로 복구됨" if recovered else "정상"
+            run.record(sid, items, state, name=cs["name"], method="레시피")
             classify_source_ids.append(sid)
+            if recovered:
+                run.sources[sid]["anomaly_note"] = (
+                    f"레시피 실행이 실패해 즉시 재발견으로 자동 복구되었습니다 ({len(items)}건)."
+                )
         except PermissionError as e:
             run.record(sid, [], "차단(robots)", e, name=cs["name"], method="레시피")
         except Exception as e:
@@ -1165,6 +1219,12 @@ def collect_all(write_db: bool = True, triggering_user_id: Optional[str] = None)
         recovered_any = False
         for sid, entry in run.sources.items():
             if not entry.get("anomaly") or sid not in board_list_urls:
+                continue
+            if sid in recipe_managed_ids:
+                # 위에서 이미 _run_recipe_source_with_recovery()로 즉시 복구를 시도했다
+                # (성공했으면 예외 없이 "정상"/"레시피로 복구됨"으로 기록돼 있어 여기
+                # anomaly 조건에 애초에 안 걸리고, 실패했으면 다시 시도해도 똑같이
+                # 실패할 뿐이다) — 같은 실행에서 LLM 재발견을 두 번 태우지 않는다.
                 continue
             recovered = recover_source_via_recipe(sid, board_list_urls[sid], common, triggering_user_id)
             if not recovered:
